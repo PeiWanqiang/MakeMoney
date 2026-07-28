@@ -1,0 +1,26 @@
+{
+  "name": "crypto-strategy-studio",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "demo": "tsx examples/run-demo.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@typescript-eslint/typescript-estree": "8.65.0",
+    "quickjs-emscripten": "0.32.0"
+  },
+  "devDependencies": {
+    "@rolldown/binding-darwin-arm64": "^1.2.0",
+    "@types/node": "^24.0.0",
+    "tsx": "4.23.1",
+    "typescript": "6.0.3",
+    "vitest": "4.1.10"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
