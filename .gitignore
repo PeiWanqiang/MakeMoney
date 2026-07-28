@@ -7,3 +7,6 @@ coverage/
 .env.*
 data/raw/
 data/processed/
+data/snapshots/
+data/cache/
+data/history/

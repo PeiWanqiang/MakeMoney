@@ -1,6 +1,10 @@
 export * from "./compiler/compile-strategy-source.js";
 export * from "./compiler/validate-strategy-source.js";
 export * from "./core/types.js";
+export * from "./data/aggregate-bars.js";
+export * from "./data/hyperliquid-client.js";
+export * from "./data/historical-dataset.js";
+export * from "./data/market-snapshot.js";
 export * from "./runtime/backtest.js";
 export * from "./runtime/sandbox.js";
 export type * from "./strategy-sdk.js";

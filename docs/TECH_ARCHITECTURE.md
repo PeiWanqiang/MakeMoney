@@ -155,6 +155,8 @@ LLM Gateway 没有市场交易凭据，也不能访问 Execution Service。
 - L2 book snapshot/updates，为 P1 滑点模型预留。
 - Liquidation events，为 P1 分析预留。
 
+历史回测的已实现底座见[历史行情数据管线](DATA_PIPELINE.md)：原始粒度统一为 1m，按月保存不可变 Parquet 与 SHA-256 manifest；Kraken `XBTUSD` 作为十年单一市场现货基准，Binance Vision `BTCUSDT` 用于快速批量验证，Hyperliquid API 用于近期永续数据。不同 venue/instrument 的序列不得静默拼接。
+
 ### 4.6 Backtest Service
 
 职责：

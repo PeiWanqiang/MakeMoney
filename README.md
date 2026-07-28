@@ -11,6 +11,8 @@
 - [内部 DSL/IR 设计](docs/STRATEGY_DSL.md)
 - [技术架构](docs/TECH_ARCHITECTURE.md)
 - [商务与市场方案](docs/BUSINESS_PLAN.md)
+- [历史行情数据管线](docs/DATA_PIPELINE.md)
+- [当前项目状态与后续工作](docs/PROJECT_STATUS.md)
 
 ## 已确定的核心原则
 
@@ -20,6 +22,29 @@
 4. 首个交易场所为 Hyperliquid，首批品种为 BTC、ETH、SOL 永续合约。
 5. 产品不托管用户资产，不接收助记词或主钱包私钥。
 6. 优先建立可信回测、真实运行记录和高质量市场数据库。
+
+## 本地数据与回测
+
+原始行情统一为 1 分钟 K 线，再确定性聚合为 15m、1h 和 4h。项目已实际下载并验证 Binance Spot `BTCUSDT` 的 2024 全年数据：527,040 根、12 个 Parquet 月分区、0 个缺失分钟。
+
+```bash
+# 快速构建/续传一年 BTC 1m 数据集
+npm run data:binance-history -- \
+  --symbol BTCUSDT \
+  --start 2024-01-01T00:00:00Z \
+  --end 2025-01-01T00:00:00Z
+
+# 用目录清单中的真实数据回测；先聚合为 4h
+npm run backtest:real -- \
+  data/history/binance-spot/BTCUSDT/1m/dataset.catalog.json 4h
+
+# 导入 Kraken 单一市场的十年 BTC/USD 1m 数据
+npm run data:kraken-history -- \
+  --start 2016-01-01T00:00:00Z \
+  --end 2026-01-01T00:00:00Z
+```
+
+下载器会校验源文件、按月写入不可变 Parquet、生成数据哈希和总目录，并在重跑时验证后续传。Kraken 的自动下载若被 Google Drive 拦截，可从官方页面下载完整 ZIP 后通过 `--archive /absolute/path/Kraken_OHLCVT.zip` 导入。
 
 ## 产品主路径
 

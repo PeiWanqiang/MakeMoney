@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "backtest:real": "tsx examples/run-real-data.ts",
+    "data:binance-history": "tsx scripts/download-binance-history.ts",
+    "data:download": "tsx scripts/download-hyperliquid.ts",
+    "data:kraken-history": "tsx scripts/import-kraken-history.ts",
     "demo": "tsx examples/run-demo.ts",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -11,6 +15,8 @@
   },
   "dependencies": {
     "@typescript-eslint/typescript-estree": "8.65.0",
+    "hyparquet": "1.26.2",
+    "hyparquet-writer": "0.16.1",
     "quickjs-emscripten": "0.32.0"
   },
   "devDependencies": {
