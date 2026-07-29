@@ -33,7 +33,16 @@ export class DatasetBacktestEvaluator implements StrategyEvaluator {
     const oneMinuteBars = loaded.bars;
     const aggregation = aggregateOneMinuteBars(oneMinuteBars, this.interval);
     if (aggregation.bars.length < 2) throw new Error(`Not enough complete ${this.interval} bars in the dataset.`);
-    const result = await runBacktest(source, aggregation.bars);
+    const timeframeBars = Object.fromEntries(
+      (["1m", "15m", "1h", "4h"] as const).map((interval) => [
+        interval,
+        aggregateOneMinuteBars(oneMinuteBars, interval).bars,
+      ]),
+    );
+    const result = await runBacktest(source, aggregation.bars, {}, {
+      primaryTimeframe: this.interval,
+      bars: timeframeBars,
+    });
     const metrics = calculateBacktestMetrics(result);
     const dataset = "catalog" in loaded
       ? {

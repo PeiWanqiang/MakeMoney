@@ -19,6 +19,20 @@ const DEFAULT_CONFIG: BacktestConfig = {
   maxLeverage: 3,
 };
 
+export type StrategyTimeframe = "1m" | "15m" | "1h" | "4h";
+
+const TIMEFRAME_MS: Record<StrategyTimeframe, number> = {
+  "1m": 60_000,
+  "15m": 15 * 60_000,
+  "1h": 60 * 60_000,
+  "4h": 4 * 60 * 60_000,
+};
+
+export interface BacktestTimeframeContext {
+  primaryTimeframe: StrategyTimeframe;
+  bars: Partial<Record<StrategyTimeframe, MarketBar[]>>;
+}
+
 interface OpenPosition {
   side: "long" | "short";
   quantity: number;
@@ -78,6 +92,7 @@ export async function runBacktest(
   source: string,
   bars: MarketBar[],
   overrides: Partial<BacktestConfig> = {},
+  timeframeContext?: BacktestTimeframeContext,
 ): Promise<BacktestResult> {
   if (bars.length < 2) {
     throw new Error("Backtest requires at least two market bars.");
@@ -93,6 +108,13 @@ export async function runBacktest(
   const trades: ClosedTrade[] = [];
   const equityCurve: BacktestResult["equityCurve"] = [];
   const sandbox = await StrategySandboxSession.create(program);
+  const timeframePointers = new Map<StrategyTimeframe, number>();
+  const sortedTimeframes = Object.fromEntries(
+    Object.entries(timeframeContext?.bars ?? {}).map(([interval, rows]) => [
+      interval,
+      [...(rows ?? [])].sort((left, right) => left.timestamp - right.timestamp),
+    ]),
+  ) as Partial<Record<StrategyTimeframe, MarketBar[]>>;
 
   const closePosition = (bar: MarketBar, rawPrice: number, reason: string): void => {
     if (!position) return;
@@ -178,7 +200,23 @@ export async function runBacktest(
       const equity = cash + currentPosition.unrealizedPnl;
       equityCurve.push({ timestamp: bar.timestamp, equity });
 
-      const invocation = await sandbox.runBar(bar, currentPosition, equity, state);
+      const newlyClosedTimeframes: Partial<Record<StrategyTimeframe, MarketBar[]>> = {};
+      if (timeframeContext) {
+        const decisionTime = bar.timestamp + TIMEFRAME_MS[timeframeContext.primaryTimeframe];
+        for (const interval of Object.keys(sortedTimeframes) as StrategyTimeframe[]) {
+          const rows = sortedTimeframes[interval] ?? [];
+          let pointer = timeframePointers.get(interval) ?? 0;
+          const start = pointer;
+          while (pointer < rows.length) {
+            const candidate = rows[pointer];
+            if (!candidate || candidate.timestamp + TIMEFRAME_MS[interval] > decisionTime) break;
+            pointer += 1;
+          }
+          if (pointer > start) newlyClosedTimeframes[interval] = rows.slice(start, pointer);
+          timeframePointers.set(interval, pointer);
+        }
+      }
+      const invocation = await sandbox.runBar(bar, currentPosition, equity, state, newlyClosedTimeframes);
       strategyMetadata ??= invocation.strategy;
       state = invocation.state;
       pendingDecision = invocation.decision;

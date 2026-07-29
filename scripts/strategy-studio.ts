@@ -4,7 +4,7 @@ import { DatasetBacktestEvaluator } from "../src/studio/dataset-backtest-evaluat
 import { DeepSeekStrategyProgramProvider } from "../src/studio/deepseek-provider.js";
 import { OpenAIStrategyProgramProvider } from "../src/studio/openai-provider.js";
 import { FileStrategySessionStore } from "../src/studio/session-store.js";
-import { StrategyGenerationError, StrategyStudio } from "../src/studio/strategy-studio.js";
+import { StrategyGenerationError, StrategyNeedsClarificationError, StrategyStudio } from "../src/studio/strategy-studio.js";
 
 type Arguments = Record<string, string | boolean>;
 
@@ -102,6 +102,8 @@ try {
     versionId: result.version.versionId,
     ordinal: result.version.ordinal,
     sourceHash: result.version.sourceHash,
+    contract: result.version.contract,
+    semanticVerification: result.version.semanticVerification,
     explanation: result.version.explanation,
     assumptions: result.version.assumptions,
     warnings: result.version.warnings,
@@ -115,6 +117,15 @@ try {
   if (error instanceof StrategyGenerationError) {
     console.error(JSON.stringify({ error: error.message, attempts: error.attempts }, null, 2));
     process.exitCode = 1;
+  } else if (error instanceof StrategyNeedsClarificationError) {
+    console.error(JSON.stringify({
+      error: error.message,
+      status: error.response.artifact.status,
+      unsupportedCapabilities: error.response.artifact.contract.unsupportedCapabilities,
+      assumptions: error.response.artifact.assumptions,
+      warnings: error.response.artifact.warnings,
+    }, null, 2));
+    process.exitCode = 2;
   } else {
     throw error;
   }

@@ -12,6 +12,7 @@
     "data:kraken-history": "tsx scripts/import-kraken-history.ts",
     "demo": "tsx examples/run-demo.ts",
     "strategy:studio": "tsx scripts/strategy-studio.ts",
+    "semantics:golden": "tsx scripts/evaluate-semantic-goldens.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

@@ -1,10 +1,13 @@
 import type { SourceDiagnostic } from "../compiler/validate-strategy-source.js";
 import type { BacktestMetrics } from "../runtime/backtest-metrics.js";
+import type { SemanticVerificationReport, StrategyContract } from "../semantics/contract.js";
 
 export type StrategyGenerationMode = "create" | "revise" | "repair";
 
 export interface StrategyModelArtifact {
+  status: "ready" | "needs_clarification";
   source: string;
+  contract: StrategyContract;
   explanation: string;
   assumptions: string[];
   warnings: string[];
@@ -74,6 +77,8 @@ export interface StrategyVersionArtifact {
   userIntent: string;
   source: string;
   sourceHash: string;
+  contract: StrategyContract;
+  semanticVerification: SemanticVerificationReport;
   explanation: string;
   assumptions: string[];
   warnings: string[];

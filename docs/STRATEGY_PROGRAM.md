@@ -1,6 +1,6 @@
 # 策略程序设计
 
-状态：Implemented local product slice v0.2
+状态：Implemented local product slice v0.3
 核心选择：AI 生成受约束 TypeScript，平台编译、审计并在 QuickJS/WASM 沙箱运行
 
 ## 1. 为什么从 DSL 转向程序
@@ -11,9 +11,11 @@
 
 ```text
 用户自然语言
-  -> AI 生成 TypeScript 策略程序
+  -> AI 同时生成机器语义契约与 TypeScript 策略程序
   -> AST 静态安全检查
   -> TypeScript 编译
+  -> 从程序反向抽取语义并与契约逐条核对
+  -> 自动生成正例、逐条件反例和变异测试
   -> 内容哈希和能力分析
   -> QuickJS/WASM 沙箱
   -> 结构化 Order Intent
@@ -64,6 +66,8 @@ defineStrategy({
 
 - `ctx.market`：当前已经发生的市场事件。
 - `ctx.indicators`：确定性指标和历史窗口。
+- `ctx.history`：受限的 OHLCV、Mark、Funding、OI 数组和 Bar 窗口。
+- `ctx.timeframe("1h")`：读取另一个周期已经闭合的 market、indicators 和 history；不会暴露尚未闭合的高周期 Bar。
 - `ctx.position`：只读仓位快照。
 - `ctx.account`：只读账户权益。
 - `ctx.state.get/set`：显式、JSON 可序列化的持久状态。
@@ -162,11 +166,13 @@ if (losses >= 3) {
 
 ```text
 用户意图
-  -> AI 生成候选程序
+  -> AI 生成候选程序 + 独立机器语义契约
   -> 编译器返回结构化错误
   -> AI 只修复错误位置
-  -> 黄金场景/属性测试
-  -> 从程序反向解释含义
+  -> 从程序反向抽取规则，与契约逐条比较
+  -> 契约自动生成正例和逐条件反例
+  -> 变异测试确认周期、方向、仓位、止损等错误会被拒绝
+  -> 从已验证契约生成用户解释
   -> 用户确认
 ```
 
@@ -178,7 +184,7 @@ if (losses >= 3) {
 - 目标 Runtime 版本。
 - 结构化编译错误。
 
-AI 不能根据失败结果偷偷改变策略含义。任何语义修改都要在 diff 和反向解释中显示。
+AI 不能根据失败结果偷偷改变策略含义。当前 SDK 无法覆盖意图时，模型必须返回 `needs_clarification` 和缺失能力，不能改成“最接近”的替代策略。任何语义修改都要在 diff 和反向解释中显示。
 
 ## 9. 当前代码结构
 
@@ -190,6 +196,12 @@ src/
   runtime/
     sandbox.ts                   # QuickJS/WASM隔离运行
     backtest.ts                  # 确定性Bar级回测
+  semantics/
+    contract.ts                  # 机器语义契约
+    extract-semantics.ts         # 从程序反向抽取交易规则
+    scenario-runner.ts           # 契约驱动的正反行为场景
+    mutation-testing.ts          # 周期/方向/仓位/止损等故障注入
+    golden-cases.ts              # 20条策略、100条合成表达
   core/types.ts                  # 决策、仓位、成交和结果
   strategy-sdk.ts                # 提供给AI和编辑器的程序接口
 examples/
@@ -214,7 +226,13 @@ test/
 - SHA-256 程序版本。
 - QuickJS/WASM 执行、内存和时间限制。
 - OHLCV、Funding 和 OI 上下文。
-- SMA、EMA、highest、lowest、percentChange。
+- SMA、EMA、highest、lowest、percentChange、standardDeviation、RSI、ATR、MACD、Bollinger Bands。
+- 受限历史数组和 Bar 窗口。
+- 1m、15m、1h、4h 多周期读取，并执行已闭合 Bar 防未来数据规则。
+- 模型语义契约、程序反向语义抽取和逐规则比较。
+- 契约驱动的正反场景验证与自动变异测试。
+- 20 条语义黄金策略、100 条合成表达、123 个场景和 100 个必杀变异。
+- DeepSeek 真实烟测已覆盖 RSI、EMA+ATR 和 15m 检查/已闭合 1h 信号，三类均零修复通过完整语义门禁。
 - 显式持久状态。
 - Hold/Open/Close 决策校验。
 - 下一根 Bar 开盘成交。
@@ -225,10 +243,10 @@ test/
 
 完整进度和优先级以[项目状态与后续工作](PROJECT_STATUS.md)为准。当前策略程序侧的未完成事项为：
 
-1. 用真实模型运行首批中英文策略意图评测，验证语义保持、修复率、延迟和成本。
-2. 实现 SDK 能力抽取和 warm-up 分析。
+1. 收集真实用户策略语料，并用 DeepSeek 运行 100 条端到端生成评测，验证语义保持、澄清率、修复率、延迟和成本。
+2. 把当前规则抽取扩展为完整 SDK 能力、数据依赖和 warm-up 分析。
 3. 增加 Reduce、Increase、MoveStop 动作。
-4. 建立 20 条黄金策略程序和至少 100 条自然语言意图评测集。
+4. 给黄金策略增加固定市场数据、程序哈希和完整回测结果，并补充状态与边界案例。
 5. 把本地 CLI 纵切包装为最小 Web 对话体验。
 6. 用同一录制数据验证 Backtest Replay 与 Paper Runtime 一致。
 

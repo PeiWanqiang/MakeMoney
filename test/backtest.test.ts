@@ -51,4 +51,41 @@ describe("deterministic bar backtest", () => {
       winRate: 1,
     });
   });
+
+  it("exposes a higher timeframe only after its bar has closed", async () => {
+    const source = `defineStrategy({
+      id: "test.closed-timeframe",
+      name: "Closed timeframe only",
+      version: 1,
+      onBar(ctx) {
+        const firstSeen = ctx.state.get("firstSeen", -1);
+        const hourly = ctx.timeframe("1h");
+        if (hourly !== null && firstSeen === -1) ctx.state.set("firstSeen", ctx.market.timestamp);
+        return { type: "hold" };
+      }
+    })`;
+    const start = Date.UTC(2026, 0, 1);
+    const quarterHourBars = Array.from({ length: 5 }, (_, index) => ({
+      timestamp: start + index * 15 * 60_000,
+      open: 100,
+      high: 101,
+      low: 99,
+      close: 100,
+      volume: 1_000,
+    }));
+    const hourlyBars = [{
+      timestamp: start,
+      open: 100,
+      high: 105,
+      low: 98,
+      close: 104,
+      volume: 4_000,
+    }];
+
+    const result = await runBacktest(source, quarterHourBars, {}, {
+      primaryTimeframe: "15m",
+      bars: { "1h": hourlyBars },
+    });
+    expect(result.finalState.firstSeen).toBe(start + 45 * 60_000);
+  });
 });

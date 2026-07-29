@@ -5,6 +5,8 @@ import {
   StrategyCompilationError,
 } from "../compiler/compile-strategy-source.js";
 import { diffStrategySource } from "./source-diff.js";
+import type { SemanticVerificationReport } from "../semantics/contract.js";
+import { verifyStrategySemantics } from "../semantics/verify-semantics.js";
 import { FileStrategySessionStore } from "./session-store.js";
 import type {
   CompilationAttempt,
@@ -23,6 +25,16 @@ export class StrategyGenerationError extends Error {
     super(`The generated strategy did not compile after ${attempts.length} attempt(s).`);
     this.name = "StrategyGenerationError";
     this.attempts = attempts;
+  }
+}
+
+export class StrategyNeedsClarificationError extends Error {
+  readonly response: StrategyProviderResponse;
+
+  constructor(response: StrategyProviderResponse) {
+    super(`Strategy needs clarification: ${response.artifact.contract.unsupportedCapabilities.join(", ")}`);
+    this.name = "StrategyNeedsClarificationError";
+    this.response = response;
   }
 }
 
@@ -52,6 +64,7 @@ function versionIdentifier(value: Omit<StrategyVersionArtifact, "versionId">): s
       parentVersionId: value.parentVersionId,
       userIntent: value.userIntent,
       sourceHash: value.sourceHash,
+      contract: value.contract,
       evaluationId: value.evaluation?.evaluationId ?? null,
     }))
     .digest("hex");
@@ -83,6 +96,7 @@ export class StrategyStudio {
     response: StrategyProviderResponse;
     sourceHash: string;
     failedAttempts: CompilationAttempt[];
+    semanticVerification: SemanticVerificationReport;
   }> {
     const failedAttempts: CompilationAttempt[] = [];
     let mode: StrategyGenerationMode = input.mode;
@@ -99,9 +113,34 @@ export class StrategyStudio {
         ...(currentSource === undefined ? {} : { currentSource }),
         ...(diagnostics === undefined ? {} : { compilerDiagnostics: diagnostics }),
       });
+      if (response.artifact.status === "needs_clarification") throw new StrategyNeedsClarificationError(response);
       try {
         const compiled = compileStrategySource(response.artifact.source);
-        return { response, sourceHash: compiled.sourceHash, failedAttempts };
+        const semanticVerification = await verifyStrategySemantics(response.artifact.source, response.artifact.contract);
+        if (!semanticVerification.ok) {
+          const semanticDiagnostics = semanticVerification.diagnostics.map((item) => ({
+            code: item.code,
+            message: [
+              item.message,
+              item.expected === undefined ? undefined : `Expected: ${item.expected}`,
+              item.actual === undefined ? undefined : `Actual: ${item.actual}`,
+            ].filter((value): value is string => value !== undefined).join(" "),
+          }));
+          failedAttempts.push({
+            attempt,
+            mode,
+            provider: response.provider,
+            model: response.model,
+            ...(response.responseId === undefined ? {} : { responseId: response.responseId }),
+            source: response.artifact.source,
+            diagnostics: semanticDiagnostics,
+          });
+          currentSource = response.artifact.source;
+          diagnostics = semanticDiagnostics;
+          mode = "repair";
+          continue;
+        }
+        return { response, sourceHash: compiled.sourceHash, failedAttempts, semanticVerification };
       } catch (error) {
         if (!(error instanceof StrategyCompilationError)) throw error;
         failedAttempts.push({
@@ -142,6 +181,8 @@ export class StrategyStudio {
       userIntent: input.intent,
       source: generated.response.artifact.source,
       sourceHash: generated.sourceHash,
+      contract: generated.response.artifact.contract,
+      semanticVerification: generated.semanticVerification,
       explanation: generated.response.artifact.explanation,
       assumptions: generated.response.artifact.assumptions,
       warnings: generated.response.artifact.warnings,
@@ -194,6 +235,8 @@ export class StrategyStudio {
       userIntent: input.intent,
       source: generated.response.artifact.source,
       sourceHash: generated.sourceHash,
+      contract: generated.response.artifact.contract,
+      semanticVerification: generated.semanticVerification,
       explanation: generated.response.artifact.explanation,
       assumptions: generated.response.artifact.assumptions,
       warnings: generated.response.artifact.warnings,

@@ -70,4 +70,37 @@ describe("strategy sandbox", () => {
     expect(state).toEqual(oneShot.state);
     expect(state).toEqual({ ema: 102.75 });
   });
+
+  it("provides mainstream indicators and bounded read-only history", async () => {
+    const indicatorStrategy = `defineStrategy({
+      id: "test.mainstream-indicators",
+      name: "Mainstream indicators",
+      version: 1,
+      onBar(ctx) {
+        const values = ctx.history.values("close", 5);
+        const customMean = values === null ? null : values.reduce((sum, value) => sum + value, 0) / values.length;
+        ctx.state.set("customMean", customMean);
+        ctx.state.set("rsi", ctx.indicators.rsi("close", 14));
+        ctx.state.set("atr", ctx.indicators.atr(14));
+        ctx.state.set("macd", ctx.indicators.macd("close", 12, 26, 9));
+        ctx.state.set("bands", ctx.indicators.bollingerBands("close", 20, 2));
+        return { type: "hold" };
+      }
+    })`;
+    const bars = Array.from({ length: 40 }, (_, index) => ({
+      ...bar,
+      timestamp: bar.timestamp + index * 60_000,
+      open: 100 + index,
+      high: 102 + index,
+      low: 99 + index,
+      close: 101 + index,
+    }));
+
+    const result = await runStrategyProgram(indicatorStrategy, { ...invocation, bars });
+    expect(result.state.customMean).toBe(138);
+    expect(result.state.rsi).toBe(100);
+    expect(result.state.atr).toBeCloseTo(3, 10);
+    expect(result.state.macd).toMatchObject({ macd: expect.any(Number), signal: expect.any(Number), histogram: expect.any(Number) });
+    expect(result.state.bands).toMatchObject({ middle: expect.any(Number), upper: expect.any(Number), lower: expect.any(Number) });
+  });
 });

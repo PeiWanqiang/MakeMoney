@@ -26,7 +26,7 @@
 
 ## 自然语言策略闭环
 
-本地 CLI 已打通第一条产品主路径：自然语言意图 → DeepSeek/OpenAI 结构化生成 → AST/完整 TypeScript 类型检查 → 最多两次定点修复 → 解释与假设 → 不可变策略版本 → 可选真实数据回测。用户修改会生成新版本和源码 diff，旧版本文件不会被覆盖。
+本地 CLI 已打通第一条产品主路径：自然语言意图 → DeepSeek/OpenAI 同时生成机器语义契约与受约束 TypeScript → AST/完整 TypeScript 类型检查 → 从程序反向抽取规则 → 契约逐条比对与正反行为场景 → 最多两次定点修复 → 解释与假设 → 不可变策略版本 → 可选真实数据回测。用户修改会生成新版本和源码 diff，旧版本文件不会被覆盖；当前能力无法覆盖的意图会明确要求澄清，不会静默改成近似策略。
 
 ```bash
 export DEEPSEEK_API_KEY="sk-..."
@@ -48,6 +48,13 @@ npm run strategy:studio -- show --session btc-ema-v1
 ```
 
 默认 provider/model 为 DeepSeek `deepseek-v4-pro`，可用 `--provider deepseek|openai` 和 `--model` 覆盖；使用 OpenAI 时设置 `OPENAI_API_KEY`。API Key 只从环境读取，不写入会话制品。为兼容只保存 Key 主体的旧环境，DeepSeek provider 会在内存中补全缺失的 `sk-` 前缀，但不会修改环境或落盘。策略会话位于 `data/strategy-sessions/`，默认被 Git 忽略。
+
+Strategy SDK 已支持 SMA、EMA、RSI、ATR、MACD、Bollinger Bands、标准差、最高/最低、涨跌幅、历史数组/Bar，以及 1m、15m、1h、4h 多周期读取。高周期数据只有在对应 Bar 闭合后才会进入策略，避免未来数据泄漏。
+
+```bash
+# 复跑20条语义黄金策略、123个正反场景和100个错误变体
+npm run semantics:golden
+```
 
 ## 本地数据与回测
 

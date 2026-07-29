@@ -32,7 +32,7 @@ describe("strategy source validation", () => {
       name: "Invalid SDK call",
       version: 1,
       onBar(ctx) {
-        const value = ctx.indicators.rsi(14);
+        const value = ctx.indicators.stochastic(14);
         return { type: "hold", reason: String(value) };
       }
     })`;

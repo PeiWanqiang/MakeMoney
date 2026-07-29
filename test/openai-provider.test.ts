@@ -9,7 +9,9 @@ describe("OpenAI strategy provider", () => {
     const create = vi.fn().mockResolvedValue({
       id: "resp_fixture",
       output_text: JSON.stringify({
+        status: "ready",
         source: thresholdStrategy,
+        contract: { schemaVersion: "1.0", timeframe: "4h", rules: [], unsupportedCapabilities: [] },
         explanation: "Threshold entry and exit.",
         assumptions: ["One-hour closed bars."],
         warnings: [],

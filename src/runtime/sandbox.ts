@@ -17,6 +17,7 @@ import type {
 
 export interface StrategyInvocation {
   bars: MarketBar[];
+  timeframes?: Partial<Record<"1m" | "15m" | "1h" | "4h", MarketBar[]>>;
   position: RuntimePosition;
   equity: number;
   state: StrategyState;
@@ -25,6 +26,18 @@ export interface StrategyInvocation {
 export interface SandboxLimits {
   timeoutMs: number;
   memoryLimitBytes: number;
+}
+
+export interface StrategySemanticScenario {
+  market?: Partial<MarketBar>;
+  position?: Partial<RuntimePosition>;
+  equity?: number;
+  state?: StrategyState;
+  indicators?: Record<string, JsonValue>;
+  timeframes?: Partial<Record<"1m" | "15m" | "1h" | "4h", {
+    market?: Partial<MarketBar>;
+    indicators?: Record<string, JsonValue>;
+  }>>;
 }
 
 const DEFAULT_LIMITS: SandboxLimits = {
@@ -118,8 +131,27 @@ globalThis.fetch = undefined;
 
 const defineStrategy = (definition) => definition;
 const __strategy = (${program.javascript});
-const __bars = [];
-const __emaCaches = Object.create(null);
+const __frameBars = Object.create(null);
+const __frameEmaCaches = Object.create(null);
+__frameBars.current = [];
+__frameEmaCaches.current = Object.create(null);
+let __bars = __frameBars.current;
+let __emaCaches = __frameEmaCaches.current;
+
+function __withFrame(key, callback) {
+  const previousBars = __bars;
+  const previousCaches = __emaCaches;
+  __frameBars[key] ??= [];
+  __frameEmaCaches[key] ??= Object.create(null);
+  __bars = __frameBars[key];
+  __emaCaches = __frameEmaCaches[key];
+  try {
+    return callback();
+  } finally {
+    __bars = previousBars;
+    __emaCaches = previousCaches;
+  }
+}
 
 function __value(field, offset = 0) {
   const index = __bars.length - 1 - offset;
@@ -177,6 +209,12 @@ function __appendBars(rows) {
   }
 }
 
+function __appendTimeframes(timeframes) {
+  for (const key of Object.keys(timeframes ?? {})) {
+    __withFrame(key, () => __appendBars(timeframes[key]));
+  }
+}
+
 function __sma(field, period, offset = 0) {
   const values = __window(field, period, offset);
   return values ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
@@ -211,9 +249,150 @@ function __percentChange(field, periods) {
   return current === null || previous === null || previous === 0 ? null : current / previous - 1;
 }
 
+function __standardDeviation(field, period, offset = 0) {
+  const values = __window(field, period, offset);
+  if (!values) return null;
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
+  return Math.sqrt(variance);
+}
+
+function __rsi(field, period, offset = 0) {
+  if (!Number.isInteger(period) || period <= 0 || !Number.isInteger(offset) || offset < 0) return null;
+  const end = __bars.length - offset;
+  if (end < period + 1) return null;
+  let averageGain = 0;
+  let averageLoss = 0;
+  for (let index = 1; index <= period; index += 1) {
+    const change = __bars[index][field] - __bars[index - 1][field];
+    averageGain += Math.max(0, change) / period;
+    averageLoss += Math.max(0, -change) / period;
+  }
+  for (let index = period + 1; index < end; index += 1) {
+    const change = __bars[index][field] - __bars[index - 1][field];
+    averageGain = (averageGain * (period - 1) + Math.max(0, change)) / period;
+    averageLoss = (averageLoss * (period - 1) + Math.max(0, -change)) / period;
+  }
+  if (averageLoss === 0) return averageGain === 0 ? 50 : 100;
+  return 100 - 100 / (1 + averageGain / averageLoss);
+}
+
+function __trueRange(index) {
+  const bar = __bars[index];
+  if (!bar) return null;
+  if (index === 0) return bar.high - bar.low;
+  const previousClose = __bars[index - 1].close;
+  return Math.max(bar.high - bar.low, Math.abs(bar.high - previousClose), Math.abs(bar.low - previousClose));
+}
+
+function __atr(period, offset = 0) {
+  if (!Number.isInteger(period) || period <= 0 || !Number.isInteger(offset) || offset < 0) return null;
+  const end = __bars.length - offset;
+  if (end < period) return null;
+  let value = 0;
+  for (let index = 0; index < period; index += 1) value += __trueRange(index) / period;
+  for (let index = period; index < end; index += 1) value = (value * (period - 1) + __trueRange(index)) / period;
+  return value;
+}
+
+function __emaSeries(field, period) {
+  const key = field + ":" + period;
+  let cache = __emaCaches[key];
+  if (!cache) {
+    cache = { field, period, alpha: 2 / (period + 1), values: [] };
+    __emaCaches[key] = cache;
+    for (let index = 0; index < __bars.length; index += 1) __advanceEma(cache, index);
+  }
+  return cache.values;
+}
+
+function __macd(field, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9, offset = 0) {
+  if (![fastPeriod, slowPeriod, signalPeriod].every(value => Number.isInteger(value) && value > 0) || fastPeriod >= slowPeriod) return null;
+  const target = __bars.length - 1 - offset;
+  const fast = __emaSeries(field, fastPeriod);
+  const slow = __emaSeries(field, slowPeriod);
+  const macdValues = [];
+  for (let index = 0; index <= target; index += 1) {
+    macdValues.push(typeof fast[index] === "number" && typeof slow[index] === "number" ? fast[index] - slow[index] : null);
+  }
+  const available = macdValues.filter(value => typeof value === "number");
+  if (available.length < signalPeriod) return null;
+  const alpha = 2 / (signalPeriod + 1);
+  let signal = available.slice(0, signalPeriod).reduce((sum, value) => sum + value, 0) / signalPeriod;
+  for (let index = signalPeriod; index < available.length; index += 1) signal = alpha * available[index] + (1 - alpha) * signal;
+  const macd = macdValues[target];
+  return typeof macd === "number" ? { macd, signal, histogram: macd - signal } : null;
+}
+
+function __bollingerBands(field, period, standardDeviations = 2, offset = 0) {
+  const middle = __sma(field, period, offset);
+  const deviation = __standardDeviation(field, period, offset);
+  if (middle === null || deviation === null || !Number.isFinite(standardDeviations) || standardDeviations <= 0) return null;
+  return { middle, upper: middle + standardDeviations * deviation, lower: middle - standardDeviations * deviation };
+}
+
+function __historyValues(field, period, offset = 0) {
+  return __window(field, period, offset);
+}
+
+function __historyBars(period, offset = 0) {
+  if (!Number.isInteger(period) || period <= 0 || !Number.isInteger(offset) || offset < 0) return null;
+  const end = __bars.length - offset;
+  const start = end - period;
+  if (start < 0) return null;
+  return __bars.slice(start, end).map(bar => Object.freeze({
+    timestamp: bar.timestamp,
+    open: bar.open,
+    high: bar.high,
+    low: bar.low,
+    close: bar.close,
+    volume: bar.volume,
+    markPrice: bar.markPrice ?? bar.close,
+    fundingRate: bar.fundingRate ?? 0,
+    openInterest: bar.openInterest ?? null
+  }));
+}
+
+function __dataView(key) {
+  const bars = __frameBars[key];
+  if (!bars || bars.length === 0) return null;
+  const latest = bars[bars.length - 1];
+  const call = (fn, args) => __withFrame(key, () => fn(...args));
+  return Object.freeze({
+    market: Object.freeze({
+      timestamp: latest.timestamp,
+      open: latest.open,
+      high: latest.high,
+      low: latest.low,
+      close: latest.close,
+      volume: latest.volume,
+      markPrice: latest.markPrice ?? latest.close,
+      fundingRate: latest.fundingRate ?? 0,
+      openInterest: latest.openInterest ?? null
+    }),
+    indicators: Object.freeze({
+      sma: (...args) => call(__sma, args),
+      ema: (...args) => call(__ema, args),
+      highest: (...args) => call(__highest, args),
+      lowest: (...args) => call(__lowest, args),
+      percentChange: (...args) => call(__percentChange, args),
+      standardDeviation: (...args) => call(__standardDeviation, args),
+      rsi: (...args) => call(__rsi, args),
+      atr: (...args) => call(__atr, args),
+      macd: (...args) => call(__macd, args),
+      bollingerBands: (...args) => call(__bollingerBands, args)
+    }),
+    history: Object.freeze({
+      values: (...args) => call(__historyValues, args),
+      bars: (...args) => call(__historyBars, args)
+    })
+  });
+}
+
 function __invoke(inputJson) {
   const __input = JSON.parse(inputJson);
   __appendBars(__input.bars);
+  __appendTimeframes(__input.timeframes);
   const __state = JSON.parse(JSON.stringify(__input.state));
   const __bar = __bars[__bars.length - 1];
   const __context = Object.freeze({
@@ -230,7 +409,20 @@ function __invoke(inputJson) {
     }),
     account: Object.freeze({ equity: __input.equity }),
     position: Object.freeze(__input.position),
-    indicators: Object.freeze({ sma: __sma, ema: __ema, highest: __highest, lowest: __lowest, percentChange: __percentChange }),
+    indicators: Object.freeze({
+      sma: __sma,
+      ema: __ema,
+      highest: __highest,
+      lowest: __lowest,
+      percentChange: __percentChange,
+      standardDeviation: __standardDeviation,
+      rsi: __rsi,
+      atr: __atr,
+      macd: __macd,
+      bollingerBands: __bollingerBands
+    }),
+    history: Object.freeze({ values: __historyValues, bars: __historyBars }),
+    timeframe: interval => __dataView(interval),
     state: Object.freeze({
       get: (key, fallback) => Object.prototype.hasOwnProperty.call(__state, key) ? __state[key] : fallback,
       set: (key, value) => { __state[key] = value; }
@@ -247,11 +439,93 @@ function __invoke(inputJson) {
     state: __state
   });
 }
+
+function __invokeSemantic(inputJson) {
+  const input = JSON.parse(inputJson);
+  const state = JSON.parse(JSON.stringify(input.state ?? {}));
+  const market = Object.freeze({
+    timestamp: input.market?.timestamp ?? 0,
+    open: input.market?.open ?? 100,
+    high: input.market?.high ?? 101,
+    low: input.market?.low ?? 99,
+    close: input.market?.close ?? 100,
+    volume: input.market?.volume ?? 1000,
+    markPrice: input.market?.markPrice ?? input.market?.close ?? 100,
+    fundingRate: input.market?.fundingRate ?? 0,
+    openInterest: input.market?.openInterest ?? 1000000
+  });
+  const position = Object.freeze({
+    side: input.position?.side ?? "flat",
+    quantity: input.position?.quantity ?? 0,
+    entryPrice: input.position?.entryPrice ?? null,
+    stopPrice: input.position?.stopPrice ?? null,
+    takeProfitPrice: input.position?.takeProfitPrice ?? null,
+    unrealizedPnl: input.position?.unrealizedPnl ?? 0
+  });
+  const key = (name, args) => {
+    const normalized = [...args];
+    if (["sma", "ema", "highest", "lowest", "standardDeviation", "rsi"].includes(name) && normalized.length < 3) normalized.push(0);
+    if (name === "atr" && normalized.length < 2) normalized.push(0);
+    if (name === "macd") {
+      const defaults = ["close", 12, 26, 9, 0];
+      while (normalized.length < defaults.length) normalized.push(defaults[normalized.length]);
+    }
+    if (name === "bollingerBands") {
+      const defaults = ["close", 20, 2, 0];
+      while (normalized.length < defaults.length) normalized.push(defaults[normalized.length]);
+    }
+    return name + "(" + normalized.map(value => typeof value === "string" ? JSON.stringify(value) : String(value)).join(",") + ")";
+  };
+  const indicator = (values, name) => (...args) => values?.[key(name, args)] ?? null;
+  const indicatorSet = values => Object.freeze({
+    sma: indicator(values, "sma"), ema: indicator(values, "ema"), highest: indicator(values, "highest"), lowest: indicator(values, "lowest"),
+    percentChange: indicator(values, "percentChange"), standardDeviation: indicator(values, "standardDeviation"),
+    rsi: indicator(values, "rsi"), atr: indicator(values, "atr"), macd: indicator(values, "macd"), bollingerBands: indicator(values, "bollingerBands")
+  });
+  const semanticTimeframe = interval => {
+    const frame = input.timeframes?.[interval];
+    if (!frame) return null;
+    const frameMarket = frame.market ?? {};
+    return Object.freeze({
+      market: Object.freeze({
+        timestamp: frameMarket.timestamp ?? 0, open: frameMarket.open ?? 100, high: frameMarket.high ?? 101,
+        low: frameMarket.low ?? 99, close: frameMarket.close ?? 100, volume: frameMarket.volume ?? 1000,
+        markPrice: frameMarket.markPrice ?? frameMarket.close ?? 100, fundingRate: frameMarket.fundingRate ?? 0,
+        openInterest: frameMarket.openInterest ?? 1000000
+      }),
+      indicators: indicatorSet(frame.indicators),
+      history: Object.freeze({ values: () => null, bars: () => null })
+    });
+  };
+  const context = Object.freeze({
+    market,
+    account: Object.freeze({ equity: input.equity ?? 10000 }),
+    position,
+    indicators: indicatorSet(input.indicators),
+    history: Object.freeze({ values: () => null, bars: () => null }),
+    timeframe: semanticTimeframe,
+    state: Object.freeze({
+      get: (name, fallback) => Object.prototype.hasOwnProperty.call(state, name) ? state[name] : fallback,
+      set: (name, value) => { state[name] = value; }
+    }),
+    crossedAbove: (currentA, previousA, currentB, previousB) =>
+      [currentA, previousA, currentB, previousB].every(Number.isFinite) && previousA <= previousB && currentA > currentB,
+    crossedBelow: (currentA, previousA, currentB, previousB) =>
+      [currentA, previousA, currentB, previousB].every(Number.isFinite) && previousA >= previousB && currentA < currentB
+  });
+  const decision = __strategy.onBar(context) ?? { type: "hold" };
+  return JSON.stringify({
+    strategy: { id: __strategy.id, name: __strategy.name, version: __strategy.version },
+    decision,
+    state
+  });
+}
 `;
 }
 
 export class StrategySandboxSession {
   private historyLength = 0;
+  private readonly timeframeHistoryLengths = new Map<string, number>();
   private disposed = false;
 
   private constructor(
@@ -287,7 +561,18 @@ export class StrategySandboxSession {
     if (invocation.bars.length < this.historyLength) throw new Error("Strategy history cannot move backwards.");
     const newBars = invocation.bars.slice(this.historyLength);
     if (newBars.length === 0) throw new Error("Strategy invocation must append at least one new market bar.");
-    return this.invoke(newBars, invocation.position, invocation.equity, invocation.state);
+    const newTimeframes: Record<string, MarketBar[]> = {};
+    for (const [interval, bars] of Object.entries(invocation.timeframes ?? {})) {
+      const previousLength = this.timeframeHistoryLengths.get(interval) ?? 0;
+      if (bars.length < previousLength) throw new Error(`Strategy ${interval} history cannot move backwards.`);
+      const appended = bars.slice(previousLength);
+      if (appended.length > 0) newTimeframes[interval] = appended;
+    }
+    const result = this.invoke(newBars, invocation.position, invocation.equity, invocation.state, newTimeframes);
+    for (const [interval, bars] of Object.entries(invocation.timeframes ?? {})) {
+      this.timeframeHistoryLengths.set(interval, bars.length);
+    }
+    return result;
   }
 
   async runBar(
@@ -295,9 +580,22 @@ export class StrategySandboxSession {
     position: RuntimePosition,
     equity: number,
     state: StrategyState,
+    timeframes: Partial<Record<"1m" | "15m" | "1h" | "4h", MarketBar[]>> = {},
   ): Promise<StrategyProgramResult> {
     if (this.disposed) throw new Error("Strategy sandbox session has been disposed.");
-    return this.invoke([bar], position, equity, state);
+    return this.invoke([bar], position, equity, state, timeframes);
+  }
+
+  async runSemanticScenario(scenario: StrategySemanticScenario): Promise<StrategyProgramResult> {
+    if (this.disposed) throw new Error("Strategy sandbox session has been disposed.");
+    this.runtime.setInterruptHandler(shouldInterruptAfterDeadline(Date.now() + this.limits.timeoutMs));
+    const source = `__invokeSemantic(${JSON.stringify(JSON.stringify(scenario))})`;
+    const handle = this.context.unwrapResult(this.context.evalCode(source));
+    try {
+      return parseSandboxResult(this.context.getString(handle), this.program);
+    } finally {
+      handle.dispose();
+    }
   }
 
   private invoke(
@@ -305,9 +603,10 @@ export class StrategySandboxSession {
     position: RuntimePosition,
     equity: number,
     state: StrategyState,
+    timeframes: Partial<Record<"1m" | "15m" | "1h" | "4h", MarketBar[]>> = {},
   ): StrategyProgramResult {
     this.runtime.setInterruptHandler(shouldInterruptAfterDeadline(Date.now() + this.limits.timeoutMs));
-    const payload = JSON.stringify({ bars, position, equity, state });
+    const payload = JSON.stringify({ bars, timeframes, position, equity, state });
     const source = `__invoke(${JSON.stringify(payload)})`;
     const handle = this.context.unwrapResult(this.context.evalCode(source));
     try {

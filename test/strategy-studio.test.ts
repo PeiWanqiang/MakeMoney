@@ -9,6 +9,7 @@ import { ScriptedStrategyProgramProvider } from "../src/studio/scripted-provider
 import { FileStrategySessionStore } from "../src/studio/session-store.js";
 import { StrategyStudio } from "../src/studio/strategy-studio.js";
 import type { StrategyProviderResponse } from "../src/studio/types.js";
+import { readyContract } from "../src/semantics/contract.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -17,12 +18,30 @@ afterEach(async () => {
 });
 
 function response(source: string, changeSummary: string): StrategyProviderResponse {
+  const stopLossPercent = source.includes("stopLossPercent: 0.03") ? 0.03 : 0.05;
   return {
     provider: "scripted",
     model: "fixture-v1",
     responseId: `response-${changeSummary}`,
     artifact: {
+      status: "ready",
       source,
+      contract: readyContract("4h", [
+        {
+          when: ['market.close >= 101', 'position.side == "flat"', 'state.entries == 0'],
+          decision: {
+            type: "open", side: "long", sizeKind: "riskPercent", sizeValue: 0.01,
+            stopLossPercent, takeProfitRiskReward: 3,
+          },
+        },
+        {
+          when: ['market.close >= 105', 'position.side == "long"'],
+          decision: {
+            type: "close", side: null, sizeKind: null, sizeValue: null,
+            stopLossPercent: null, takeProfitRiskReward: null,
+          },
+        },
+      ]),
       explanation: "A deterministic threshold strategy.",
       assumptions: ["Signals use closed bars."],
       warnings: [],
@@ -40,8 +59,8 @@ describe("strategy studio product loop", () => {
       name: "Threshold with explicit state",
       version: 1,
       onBar(ctx) {
-        const rsi = ctx.indicators.rsi(14);
-        return { type: "hold", reason: String(rsi) };
+        const stochastic = ctx.indicators.stochastic(14);
+        return { type: "hold", reason: String(stochastic) };
       }
     })`;
     const revisedSource = thresholdStrategy

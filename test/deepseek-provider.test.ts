@@ -24,7 +24,9 @@ describe("DeepSeek strategy provider", () => {
           finish_reason: "stop",
           message: {
             content: JSON.stringify({
+              status: "ready",
               source: thresholdStrategy,
+              contract: { schemaVersion: "1.0", timeframe: "4h", rules: [], unsupportedCapabilities: [] },
               explanation: "Threshold entry and exit.",
               assumptions: ["Closed bars."],
               warnings: [],
