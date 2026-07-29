@@ -41,6 +41,7 @@ export interface MarketDataQuality {
   invalidCandles: number;
   gaps: DataGap[];
   fundingEvents: number;
+  missingMarkPrices?: number;
 }
 
 export interface DownloadedMarketData {
@@ -259,4 +260,3 @@ export class HyperliquidClient {
     };
   }
 }
-

@@ -65,3 +65,38 @@ defineStrategy({
 })
 `;
 
+export const emaTrendStrategy = `
+defineStrategy({
+  id: "baseline.ema-trend",
+  name: "Long-only EMA trend baseline",
+  version: 1,
+  onBar(ctx) {
+    const fast = ctx.indicators.ema("close", 20);
+    const fastPrevious = ctx.indicators.ema("close", 20, 1);
+    const slow = ctx.indicators.ema("close", 50);
+    const slowPrevious = ctx.indicators.ema("close", 50, 1);
+
+    if (
+      ctx.position.side === "flat" &&
+      ctx.crossedAbove(fast, fastPrevious, slow, slowPrevious)
+    ) {
+      return {
+        type: "open",
+        side: "long",
+        size: { kind: "riskPercent", value: 0.01 },
+        stopLossPercent: 0.05,
+        reason: "20-period EMA crossed above 50-period EMA"
+      };
+    }
+
+    if (
+      ctx.position.side === "long" &&
+      ctx.crossedBelow(fast, fastPrevious, slow, slowPrevious)
+    ) {
+      return { type: "close", reason: "20-period EMA crossed below 50-period EMA" };
+    }
+
+    return { type: "hold" };
+  }
+})
+`;

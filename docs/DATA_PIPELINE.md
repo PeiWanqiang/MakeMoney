@@ -45,6 +45,26 @@
 
 本地数据位于 `data/`，已加入 `.gitignore`，不会提交到 Git。
 
+### BTCUSDT 永续多年度数据
+
+Binance USD-M `BTCUSDT` 永续已完成 2020-01-01 至 2026-07-01（右开区间）的完整月度回填：
+
+| 项目 | 结果 |
+|---|---:|
+| 覆盖范围 | 2020-01-01 ～ 2026-06-30 |
+| 1m 成交 K 线 | 3,417,120 |
+| 理论分钟数 | 3,417,120 |
+| 成交 K 线缺失 | 0 |
+| Funding 事件 | 7,119 |
+| Parquet 月分区 | 78 |
+| Mark Price 缺失 | 13,015（约 0.38%） |
+| ZIP 缓存 | 约 232 MB |
+| Parquet + manifest | 约 140 MB |
+
+Mark Price 缺失集中在 8 个月。manifest 逐月记录 `missingMarkPrices`，Parquet 对缺失分钟使用成交收盘价回退。回测报告必须披露这一转换，不能把回退值描述为交易所原始 Mark Price。
+
+月度事实集只更新到最后一个完整 UTC 月；当前月的日包/实时尾部尚未合并。Open Interest 的官方长期归档从较晚时间开始，且主要是 5m 日包，目前尚未进入这份 v0.1 数据集。
+
 ## 使用方式
 
 ### 一年快速验证
@@ -79,6 +99,17 @@ npm run data:kraken-history -- \
 
 Kraken 官方明确说明：无成交的分钟不会出现在 CSV 中。我们保留这个事实，不默认伪造 K 线。catalog 中的 `observedMissingMinutes` 会反映未观测分钟；需要连续时间网格的研究任务，应在派生层显式选择“前值填充、成交量为 0”，并把该转换写入回测 manifest。
 
+### 多年度永续数据
+
+```bash
+npm run data:binance-perp-history -- \
+  --symbol BTCUSDT \
+  --start 2020-01-01T00:00:00Z \
+  --end 2026-07-01T00:00:00Z
+```
+
+每个月同时下载并校验：成交 `klines`、`markPriceKlines` 和 `fundingRate`。Funding 只写入实际结算分钟，毫秒偏移会向下归一到所属分钟。输出目录默认为 `data/history/binance-usdm/BTCUSDT-PERP/1m`。
+
 ### 回测
 
 ```bash
@@ -86,7 +117,7 @@ npm run backtest:real -- \
   data/history/binance-spot/BTCUSDT/1m/dataset.catalog.json 4h
 ```
 
-现有示例策略依赖永续合约资金费，而 Binance/Kraken 这两个十年数据集是现货数据，因此它在该数据集上可能不交易。这不是行情错误；长周期永续研究还需单独接入合约 K 线、资金费、标记价格和合约换代信息。
+默认 `trend` 示例是不依赖 Funding 的 EMA 趋势工程基线，已在 2024 年现货数据上产生实际交易并输出完整 JSON 报告。也可以在命令末尾传入 `funding` 运行资金费策略；但 Binance/Kraken 这两个十年数据集是现货数据，Funding 为 0，因此资金费策略可能不交易。长周期永续研究仍需单独接入合约 K 线、资金费、标记价格和合约换代信息。
 
 ## 生产环境演进
 

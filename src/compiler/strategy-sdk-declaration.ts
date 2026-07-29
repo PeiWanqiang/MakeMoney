@@ -1,6 +1,26 @@
-import type { JsonValue, StrategyDecision } from "./core/types.js";
+/**
+ * The compile-time contract available to generated strategy programs.
+ * Keep this declaration aligned with src/strategy-sdk.ts and the sandbox runtime.
+ */
+export const STRATEGY_SDK_DECLARATION = `
+type JsonPrimitive = string | number | boolean | null;
+type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
-export interface StrategyContext {
+type StrategyDecision =
+  | { type: "hold"; reason?: string }
+  | {
+      type: "open";
+      side: "long" | "short";
+      size:
+        | { kind: "riskPercent"; value: number }
+        | { kind: "fixedNotional"; value: number };
+      stopLossPercent: number;
+      takeProfitRiskReward?: number;
+      reason?: string;
+    }
+  | { type: "close"; reason?: string };
+
+interface StrategyContext {
   readonly market: {
     readonly timestamp: number;
     readonly open: number;
@@ -12,9 +32,7 @@ export interface StrategyContext {
     readonly fundingRate: number;
     readonly openInterest: number | null;
   };
-  readonly account: {
-    readonly equity: number;
-  };
+  readonly account: { readonly equity: number };
   readonly position: {
     readonly side: "flat" | "long" | "short";
     readonly quantity: number;
@@ -37,15 +55,12 @@ export interface StrategyContext {
   crossedBelow(currentA: number | null, previousA: number | null, currentB: number | null, previousB: number | null): boolean;
 }
 
-export interface StrategyDefinition {
+interface StrategyDefinition {
   id: string;
   name: string;
   version: number;
   onBar(context: StrategyContext): StrategyDecision;
 }
 
-/**
- * This declaration is the contract shown to the code-generating model and editor.
- * The sandbox injects the runtime implementation.
- */
-export declare function defineStrategy(definition: StrategyDefinition): StrategyDefinition;
+declare function defineStrategy(definition: StrategyDefinition): StrategyDefinition;
+`.trim();

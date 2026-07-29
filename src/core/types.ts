@@ -76,6 +76,7 @@ export interface ClosedTrade {
   grossPnl: number;
   fundingPnl: number;
   fees: number;
+  slippageCost: number;
   netPnl: number;
   exitReason: string;
 }

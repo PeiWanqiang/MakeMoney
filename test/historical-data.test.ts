@@ -8,6 +8,7 @@ import { aggregateOneMinuteBars } from "../src/data/aggregate-bars.js";
 import {
   loadHistoricalDataset,
   parseBinanceKline,
+  parseBinanceFundingRate,
   parseKrakenKline,
   writeDatasetCatalog,
   writeHistoricalPartition,
@@ -42,6 +43,15 @@ describe("historical 1m data", () => {
     expect(parsed).toMatchObject({ timestamp: 1_704_067_200_000, close: 42_001, trades: 3 });
   });
 
+  it("aligns millisecond-offset Binance funding events to their minute", () => {
+    expect(parseBinanceFundingRate("1577923200002,8,0.00003662")).toEqual({
+      timestamp: 1_577_923_200_000,
+      intervalHours: 8,
+      rate: 0.00003662,
+    });
+    expect(parseBinanceFundingRate("calc_time,funding_interval_hours,last_funding_rate")).toBeUndefined();
+  });
+
   it("aggregates only complete minute buckets", () => {
     const start = Date.parse("2024-01-01T00:00:00Z");
     const complete = Array.from({ length: 15 }, (_, index) => bar(start + index * 60_000, 100 + index));
@@ -61,7 +71,7 @@ describe("historical 1m data", () => {
           coin: "BTC",
           requestedStart: start,
           requestedEnd: start + 119_999,
-          bars: [bar(start, 100), bar(start + 60_000, 101)],
+          bars: [{ ...bar(start, 100), markPrice: 100.5 }, { ...bar(start + 60_000, 101), markPrice: 101.5 }],
           identity: {
             source: "binance-vision",
             venue: "binance-spot",
@@ -85,6 +95,7 @@ describe("historical 1m data", () => {
       const loaded = await loadHistoricalDataset(catalogPath);
       expect(loaded.catalog).toMatchObject({ rowCount: 2, expectedMinutes: 2, observedMissingMinutes: 0 });
       expect(loaded.bars.map((item) => item.close)).toEqual([101, 102]);
+      expect(loaded.bars.map((item) => item.markPrice)).toEqual([100.5, 101.5]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

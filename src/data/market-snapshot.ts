@@ -14,7 +14,7 @@ export interface MarketSnapshotManifest {
   snapshotId: string;
   createdAt: string;
   source: "hyperliquid-api" | "binance-vision" | "kraken-ohlcvt";
-  venue: "hyperliquid" | "binance-spot" | "kraken-spot";
+  venue: "hyperliquid" | "binance-spot" | "binance-usdm" | "kraken-spot";
   instrument: string;
   interval: "1m";
   intervalMs: number;
@@ -31,6 +31,12 @@ export interface MarketSnapshotManifest {
     url?: string;
     archiveFile?: string;
     archiveSha256?: string;
+    archives?: Array<{
+      kind: string;
+      url: string;
+      file: string;
+      sha256: string;
+    }>;
   };
 }
 
@@ -79,20 +85,29 @@ export async function writeMarketSnapshot(
   const temporaryDataPath = join(directory, `.snapshot-${process.pid}-${Date.now()}.parquet.tmp`);
 
   try {
+    const columnData = [
+      { name: "timestamp", data: data.bars.map((row) => row.timestamp), type: "DOUBLE" as const, nullable: false },
+      { name: "endTimestamp", data: data.bars.map((row) => row.endTimestamp), type: "DOUBLE" as const, nullable: false },
+      { name: "open", data: data.bars.map((row) => row.open), type: "DOUBLE" as const, nullable: false },
+      { name: "high", data: data.bars.map((row) => row.high), type: "DOUBLE" as const, nullable: false },
+      { name: "low", data: data.bars.map((row) => row.low), type: "DOUBLE" as const, nullable: false },
+      { name: "close", data: data.bars.map((row) => row.close), type: "DOUBLE" as const, nullable: false },
+      { name: "volume", data: data.bars.map((row) => row.volume), type: "DOUBLE" as const, nullable: false },
+      { name: "trades", data: data.bars.map((row) => row.trades), type: "INT32" as const, nullable: false },
+      { name: "fundingRate", data: data.bars.map((row) => row.fundingRate ?? 0), type: "DOUBLE" as const, nullable: false },
+      { name: "fundingPremium", data: data.bars.map((row) => row.fundingPremium), type: "DOUBLE" as const, nullable: false },
+    ];
+    if (data.bars.some((row) => row.markPrice !== undefined)) {
+      columnData.push({
+        name: "markPrice",
+        data: data.bars.map((row) => row.markPrice ?? row.close),
+        type: "DOUBLE",
+        nullable: false,
+      });
+    }
     await parquetWriteFile({
       filename: temporaryDataPath,
-      columnData: [
-        { name: "timestamp", data: data.bars.map((row) => row.timestamp), type: "DOUBLE", nullable: false },
-        { name: "endTimestamp", data: data.bars.map((row) => row.endTimestamp), type: "DOUBLE", nullable: false },
-        { name: "open", data: data.bars.map((row) => row.open), type: "DOUBLE", nullable: false },
-        { name: "high", data: data.bars.map((row) => row.high), type: "DOUBLE", nullable: false },
-        { name: "low", data: data.bars.map((row) => row.low), type: "DOUBLE", nullable: false },
-        { name: "close", data: data.bars.map((row) => row.close), type: "DOUBLE", nullable: false },
-        { name: "volume", data: data.bars.map((row) => row.volume), type: "DOUBLE", nullable: false },
-        { name: "trades", data: data.bars.map((row) => row.trades), type: "INT32", nullable: false },
-        { name: "fundingRate", data: data.bars.map((row) => row.fundingRate ?? 0), type: "DOUBLE", nullable: false },
-        { name: "fundingPremium", data: data.bars.map((row) => row.fundingPremium), type: "DOUBLE", nullable: false },
-      ],
+      columnData,
       kvMetadata: [
         { key: "source", value: identity.source },
         { key: "venue", value: identity.venue },
@@ -126,18 +141,7 @@ export async function writeMarketSnapshot(
       actualStart,
       actualEnd,
       rowCount: data.bars.length,
-      columns: [
-        "timestamp",
-        "endTimestamp",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-        "trades",
-        "fundingRate",
-        "fundingPremium",
-      ],
+      columns: columnData.map((column) => column.name),
       quality: data.quality,
       dataFile: basename(dataPath),
       dataSha256,
@@ -183,6 +187,7 @@ export async function loadMarketSnapshot(manifestPath: string): Promise<{
   }
   const bars = rows.map((row) => {
     const record = row as Record<string, unknown>;
+    const markPrice = record.markPrice;
     return {
       timestamp: requiredNumber(record, "timestamp"),
       open: requiredNumber(record, "open"),
@@ -191,6 +196,7 @@ export async function loadMarketSnapshot(manifestPath: string): Promise<{
       close: requiredNumber(record, "close"),
       volume: requiredNumber(record, "volume"),
       fundingRate: requiredNumber(record, "fundingRate"),
+      ...(typeof markPrice === "number" && Number.isFinite(markPrice) ? { markPrice } : {}),
     } satisfies MarketBar;
   });
   return { manifest, bars };

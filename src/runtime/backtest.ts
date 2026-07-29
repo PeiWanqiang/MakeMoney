@@ -10,7 +10,7 @@ import type {
   StrategyState,
 } from "../core/types.js";
 import { compileStrategySource } from "../compiler/compile-strategy-source.js";
-import { runCompiledStrategyProgram } from "./sandbox.js";
+import { StrategySandboxSession } from "./sandbox.js";
 
 const DEFAULT_CONFIG: BacktestConfig = {
   initialCapital: 10_000,
@@ -25,6 +25,7 @@ interface OpenPosition {
   entryPrice: number;
   entryTimestamp: number;
   entryFee: number;
+  entrySlippageCost: number;
   fundingPnl: number;
   stopPrice: number;
   takeProfitPrice: number | null;
@@ -91,11 +92,13 @@ export async function runBacktest(
   let strategyMetadata: StrategyProgramResult["strategy"] | null = null;
   const trades: ClosedTrade[] = [];
   const equityCurve: BacktestResult["equityCurve"] = [];
+  const sandbox = await StrategySandboxSession.create(program);
 
   const closePosition = (bar: MarketBar, rawPrice: number, reason: string): void => {
     if (!position) return;
     const closingSide = position.side === "long" ? "sell" : "buy";
     const exitPrice = withSlippage(rawPrice, closingSide, config.slippageBps);
+    const exitSlippageCost = Math.abs(exitPrice - rawPrice) * position.quantity;
     const direction = position.side === "long" ? 1 : -1;
     const grossPnl = direction * (exitPrice - position.entryPrice) * position.quantity;
     const exitFee = exitPrice * position.quantity * config.takerFeeRate;
@@ -111,76 +114,77 @@ export async function runBacktest(
       grossPnl,
       fundingPnl: position.fundingPnl,
       fees,
+      slippageCost: position.entrySlippageCost + exitSlippageCost,
       netPnl: grossPnl + position.fundingPnl - fees,
       exitReason: reason,
     });
     position = null;
   };
 
-  for (let index = 0; index < bars.length; index += 1) {
-    const bar = bars[index];
-    if (!bar) continue;
+  try {
+    for (let index = 0; index < bars.length; index += 1) {
+      const bar = bars[index];
+      if (!bar) continue;
 
-    if (pendingDecision?.type === "open" && !position) {
-      const fillSide = pendingDecision.side === "long" ? "buy" : "sell";
-      const entryPrice = withSlippage(bar.open, fillSide, config.slippageBps);
-      const quantity = positionQuantity(pendingDecision, entryPrice, cash, config.maxLeverage);
-      const entryFee = entryPrice * quantity * config.takerFeeRate;
-      cash -= entryFee;
-      const direction = pendingDecision.side === "long" ? 1 : -1;
-      const stopDistance = entryPrice * pendingDecision.stopLossPercent;
-      position = {
-        side: pendingDecision.side,
-        quantity,
-        entryPrice,
-        entryTimestamp: bar.timestamp,
-        entryFee,
-        fundingPnl: 0,
-        stopPrice: entryPrice - direction * stopDistance,
-        takeProfitPrice:
-          pendingDecision.takeProfitRiskReward === undefined
-            ? null
-            : entryPrice + direction * stopDistance * pendingDecision.takeProfitRiskReward,
-      };
-    } else if (pendingDecision?.type === "close" && position) {
-      closePosition(bar, bar.open, pendingDecision.reason ?? "strategy");
-    }
-    pendingDecision = null;
-
-    if (position) {
-      const notional = position.quantity * (bar.markPrice ?? bar.close);
-      const direction = position.side === "long" ? 1 : -1;
-      const fundingPnl = -direction * notional * (bar.fundingRate ?? 0);
-      cash += fundingPnl;
-      position.fundingPnl += fundingPnl;
-
-      const stopHit = position.side === "long" ? bar.low <= position.stopPrice : bar.high >= position.stopPrice;
-      const takeProfitHit =
-        position.takeProfitPrice !== null &&
-        (position.side === "long" ? bar.high >= position.takeProfitPrice : bar.low <= position.takeProfitPrice);
-
-      // Conservative and deterministic: if both happen in one bar, assume the stop was hit first.
-      if (stopHit) {
-        closePosition(bar, position.stopPrice, "stopLoss");
-      } else if (takeProfitHit && position?.takeProfitPrice !== null) {
-        closePosition(bar, position.takeProfitPrice, "takeProfit");
+      if (pendingDecision?.type === "open" && !position) {
+        const fillSide = pendingDecision.side === "long" ? "buy" : "sell";
+        const entryPrice = withSlippage(bar.open, fillSide, config.slippageBps);
+        const quantity = positionQuantity(pendingDecision, entryPrice, cash, config.maxLeverage);
+        const entryFee = entryPrice * quantity * config.takerFeeRate;
+        cash -= entryFee;
+        const direction = pendingDecision.side === "long" ? 1 : -1;
+        const stopDistance = entryPrice * pendingDecision.stopLossPercent;
+        position = {
+          side: pendingDecision.side,
+          quantity,
+          entryPrice,
+          entryTimestamp: bar.timestamp,
+          entryFee,
+          entrySlippageCost: Math.abs(entryPrice - bar.open) * quantity,
+          fundingPnl: 0,
+          stopPrice: entryPrice - direction * stopDistance,
+          takeProfitPrice:
+            pendingDecision.takeProfitRiskReward === undefined
+              ? null
+              : entryPrice + direction * stopDistance * pendingDecision.takeProfitRiskReward,
+        };
+      } else if (pendingDecision?.type === "close" && position) {
+        closePosition(bar, bar.open, pendingDecision.reason ?? "strategy");
       }
+      pendingDecision = null;
+
+      if (position) {
+        const notional = position.quantity * (bar.markPrice ?? bar.close);
+        const direction = position.side === "long" ? 1 : -1;
+        const fundingPnl = -direction * notional * (bar.fundingRate ?? 0);
+        cash += fundingPnl;
+        position.fundingPnl += fundingPnl;
+
+        const stopHit = position.side === "long" ? bar.low <= position.stopPrice : bar.high >= position.stopPrice;
+        const takeProfitHit =
+          position.takeProfitPrice !== null &&
+          (position.side === "long" ? bar.high >= position.takeProfitPrice : bar.low <= position.takeProfitPrice);
+
+        // Conservative and deterministic: if both happen in one bar, assume the stop was hit first.
+        if (stopHit) {
+          closePosition(bar, position.stopPrice, "stopLoss");
+        } else if (takeProfitHit && position?.takeProfitPrice !== null) {
+          closePosition(bar, position.takeProfitPrice, "takeProfit");
+        }
+      }
+
+      const markPrice = bar.markPrice ?? bar.close;
+      const currentPosition = runtimePosition(position, markPrice);
+      const equity = cash + currentPosition.unrealizedPnl;
+      equityCurve.push({ timestamp: bar.timestamp, equity });
+
+      const invocation = await sandbox.runBar(bar, currentPosition, equity, state);
+      strategyMetadata ??= invocation.strategy;
+      state = invocation.state;
+      pendingDecision = invocation.decision;
     }
-
-    const markPrice = bar.markPrice ?? bar.close;
-    const currentPosition = runtimePosition(position, markPrice);
-    const equity = cash + currentPosition.unrealizedPnl;
-    equityCurve.push({ timestamp: bar.timestamp, equity });
-
-    const invocation = await runCompiledStrategyProgram(program, {
-      bars: bars.slice(0, index + 1),
-      position: currentPosition,
-      equity,
-      state,
-    });
-    strategyMetadata ??= invocation.strategy;
-    state = invocation.state;
-    pendingDecision = invocation.decision;
+  } finally {
+    sandbox.dispose();
   }
 
   const lastBar = bars.at(-1);

@@ -1,6 +1,6 @@
 # 策略程序设计
 
-状态：Implemented spike v0.1  
+状态：Implemented local product slice v0.2
 核心选择：AI 生成受约束 TypeScript，平台编译、审计并在 QuickJS/WASM 沙箱运行
 
 ## 1. 为什么从 DSL 转向程序
@@ -203,6 +203,11 @@ test/
 
 ## 10. 当前已实现
 
+- DeepSeek V4 Pro 默认 provider 和 OpenAI Responses API 后备 provider。
+- 自然语言生成、结构化编译诊断和最多两轮定点修复。
+- 完整 TypeScript 语义类型检查，可阻止模型虚构 SDK 方法。
+- 反向解释、假设、警告、变更摘要和源码 diff。
+- 不可变策略会话版本以及可选真实数据回测制品。
 - 单一 `defineStrategy` 程序入口。
 - TypeScript AST 解析与禁止能力检查。
 - TypeScript 到 JavaScript 编译。
@@ -220,13 +225,12 @@ test/
 
 完整进度和优先级以[项目状态与后续工作](PROJECT_STATUS.md)为准。当前策略程序侧的未完成事项为：
 
-1. 扩展固定数据快照：现货年度数据已完成；仍需长期永续 K 线、Funding、Mark Price 和 OI。
-2. 为策略程序增加完整类型检查，而不只做转译。
-3. 实现 SDK 能力抽取和 warm-up 分析。
-4. 增加 Reduce、Increase、MoveStop 动作。
-5. 建立 20 条黄金策略程序。
+1. 用真实模型运行首批中英文策略意图评测，验证语义保持、修复率、延迟和成本。
+2. 实现 SDK 能力抽取和 warm-up 分析。
+3. 增加 Reduce、Increase、MoveStop 动作。
+4. 建立 20 条黄金策略程序和至少 100 条自然语言意图评测集。
+5. 把本地 CLI 纵切包装为最小 Web 对话体验。
 6. 用同一录制数据验证 Backtest Replay 与 Paper Runtime 一致。
-7. 接入 LLM 生成与结构化修复循环。
 
 ## 12. 不变的安全原则
 

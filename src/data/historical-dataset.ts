@@ -26,6 +26,8 @@ export interface HistoricalPartition {
   actualEnd: number;
   dataSha256: string;
   gaps: number;
+  fundingEvents: number;
+  missingMarkPrices: number;
 }
 
 export interface HistoricalDatasetCatalog {
@@ -43,6 +45,8 @@ export interface HistoricalDatasetCatalog {
   rowCount: number;
   expectedMinutes: number;
   observedMissingMinutes: number;
+  fundingEvents: number;
+  missingMarkPrices: number;
   partitions: HistoricalPartition[];
 }
 
@@ -53,6 +57,8 @@ export interface PartitionInput {
   requestedEnd: number;
   bars: NormalizedMarketBar[];
   identity: MarketSnapshotIdentity;
+  fundingEvents?: number;
+  missingMarkPrices?: number;
 }
 
 export function parseUtcDate(value: string): number {
@@ -116,6 +122,28 @@ export function parseKrakenKline(line: string): NormalizedMarketBar | undefined 
   return { timestamp, endTimestamp: timestamp + ONE_MINUTE_MS - 1, open, high, low, close, volume, trades, fundingRate: 0, fundingPremium: 0 };
 }
 
+export interface FundingRateEvent {
+  timestamp: number;
+  intervalHours: number;
+  rate: number;
+}
+
+export function parseBinanceFundingRate(line: string): FundingRateEvent | undefined {
+  const columns = line.trim().split(",");
+  if (!/^\d+$/.test(columns[0] ?? "")) return undefined;
+  const rawTimestamp = Number(columns[0]);
+  const intervalHours = Number(columns[1]);
+  const rate = Number(columns[2]);
+  if (![rawTimestamp, intervalHours, rate].every(Number.isFinite) || intervalHours <= 0) {
+    throw new Error(`Invalid Binance funding row '${line}'.`);
+  }
+  return {
+    timestamp: Math.floor(rawTimestamp / ONE_MINUTE_MS) * ONE_MINUTE_MS,
+    intervalHours,
+    rate,
+  };
+}
+
 function validateBars(bars: NormalizedMarketBar[]): { bars: NormalizedMarketBar[]; quality: MarketDataQuality } {
   const unique = new Map<number, NormalizedMarketBar>();
   let duplicateCandles = 0;
@@ -162,7 +190,11 @@ export async function writeHistoricalPartition(input: PartitionInput, outputDire
     requestedStart: input.requestedStart,
     requestedEnd: input.requestedEnd,
     bars: validated.bars,
-    quality: validated.quality,
+    quality: {
+      ...validated.quality,
+      fundingEvents: input.fundingEvents ?? validated.quality.fundingEvents,
+      ...(input.missingMarkPrices === undefined ? {} : { missingMarkPrices: input.missingMarkPrices }),
+    },
   };
   const snapshot = await writeMarketSnapshot(data, join(outputDirectory, "partitions", input.month), input.identity);
   return {
@@ -174,6 +206,8 @@ export async function writeHistoricalPartition(input: PartitionInput, outputDire
     actualEnd: snapshot.manifest.actualEnd,
     dataSha256: snapshot.manifest.dataSha256,
     gaps: snapshot.manifest.quality.gaps.reduce((sum, gap) => sum + gap.missingBars, 0),
+    fundingEvents: snapshot.manifest.quality.fundingEvents,
+    missingMarkPrices: snapshot.manifest.quality.missingMarkPrices ?? 0,
   };
 }
 
@@ -200,6 +234,8 @@ export async function findVerifiedPartition(outputDirectory: string, month: stri
     actualEnd: manifest.actualEnd,
     dataSha256: manifest.dataSha256,
     gaps: manifest.quality.gaps.reduce((sum, gap) => sum + gap.missingBars, 0),
+    fundingEvents: manifest.quality.fundingEvents,
+    missingMarkPrices: manifest.quality.missingMarkPrices ?? 0,
   };
 }
 
@@ -226,6 +262,8 @@ export async function writeDatasetCatalog(
     rowCount,
     expectedMinutes,
     observedMissingMinutes: Math.max(0, expectedMinutes - rowCount),
+    fundingEvents: sorted.reduce((sum, partition) => sum + partition.fundingEvents, 0),
+    missingMarkPrices: sorted.reduce((sum, partition) => sum + partition.missingMarkPrices, 0),
     partitions: sorted.map((partition) => ({
       ...partition,
       manifestFile: relative(absoluteOutput, resolve(partition.manifestFile)),

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { runBacktest } from "../src/runtime/backtest.js";
+import { calculateBacktestMetrics } from "../src/runtime/backtest-metrics.js";
 import { thresholdStrategy } from "../examples/strategies.js";
 
 describe("deterministic bar backtest", () => {
@@ -40,6 +41,14 @@ describe("deterministic bar backtest", () => {
     });
     expect(first.finalEquity).toBeGreaterThan(first.initialCapital);
     expect(first.finalState).toEqual({ entries: 1 });
+    expect(calculateBacktestMetrics(first)).toMatchObject({
+      tradeCount: 1,
+      winningTrades: 1,
+      losingTrades: 0,
+      fees: 0,
+      fundingPnl: 0,
+      slippageCost: 0,
+      winRate: 1,
+    });
   });
 });
-
