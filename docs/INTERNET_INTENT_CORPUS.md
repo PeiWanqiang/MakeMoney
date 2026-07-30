@@ -80,6 +80,9 @@ npm run intents:review -- queue --reviewer reviewer-1 --limit 25
 
 # 查看进度
 npm run intents:review -- stats
+
+# 为审核队列生成 DeepSeek 双路只读建议
+npm run intents:suggest -- --limit 25 --concurrency 2
 ```
 
 默认文件：
@@ -144,6 +147,18 @@ npm run intents:review -- export --minimum-reviewers 1 --require-adjudication fa
 导出时再次验证原文 SHA、证据区间、状态字段和契约结构。`not_strategy` 作为过滤依据保留在标注记录中，但不进入黄金策略集。开发、验证和盲测按作者分组；GitHub 内容按仓库分组，同一作者或仓库不会跨集合泄漏。导出清单记录质量门槛、各类数量和整个 JSONL 的 SHA-256。
 
 这个流程验证的是“黄金答案确实来自用户原文”，并不能仅凭一条回测收益证明翻译正确。后续评测仍需同时检查：黄金契约差异、生成代码静态语义、确定性行为场景和变异测试。
+
+### AI 双路建议
+
+`intents:suggest` 先用确定性规则把混合内容分为 prose 和 code 两路，再独立调用 DeepSeek。每路都可以给出四种 disposition、原文证据、缺失问题或建议契约。系统只把建议写入：
+
+```text
+data/internet-intents/review/suggestions.jsonl
+```
+
+它不会写入 `annotations.jsonl`，也没有提交审核的代码路径。建议中的每个引用仍须逐字符存在于候选原文中；模型改写引用、返回非法状态或无效契约时，该路标为 `error`，命令以失败状态退出，下次运行会重试。两路 disposition 或契约不一致时标为 `conflict`，不自动合并。一路文本不足时标为 `unavailable`，整体为 `insufficient`。
+
+2026-07-30 对真实队列前三条做最小试跑：一条只有 prose 建议；一条代码路首次因非原文引用被质量门禁拒绝，断点重试后通过；一条 Pine 排错样本在 prose/code 间出现 disposition 冲突。最终结果为1条 agree、1条 conflict、1条 insufficient、0条 lane error。结果证明该层能暴露混合文本歧义，但这些结果仍不是人工审核或黄金标签。
 
 ## 8. 下一阶段
 
