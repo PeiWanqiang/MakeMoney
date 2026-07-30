@@ -13,6 +13,7 @@
     "demo": "tsx examples/run-demo.ts",
     "strategy:studio": "tsx scripts/strategy-studio.ts",
     "semantics:golden": "tsx scripts/evaluate-semantic-goldens.ts",
+    "semantics:deepseek": "tsx scripts/evaluate-deepseek-intents.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

@@ -54,7 +54,12 @@ Strategy SDK 已支持 SMA、EMA、RSI、ATR、MACD、Bollinger Bands、标准�
 ```bash
 # 复跑20条语义黄金策略、123个正反场景和100个错误变体
 npm run semantics:golden
+
+# 用真实 DeepSeek 跑100条合成自然语言表达；报告支持断点续跑
+npm run semantics:deepseek -- --limit 100 --concurrency 6
 ```
+
+真实模型评测会记录每条样例的契约差异、修复次数、延迟、token 和估算成本，默认写入 Git 已忽略的 `data/reports/semantic-evals/`。首轮全量基线为 86/100；修复生成提示、语料歧义和验证器误报后，全部 14 条失败样例的定向回归为 14/14。该结果来自合成表达，完整 V3 全量重跑和真实用户语料评测仍未完成。
 
 ## 本地数据与回测
 

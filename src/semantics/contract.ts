@@ -83,7 +83,100 @@ function compactCondition(value: string): string {
     if (!quoted && /\s/.test(character)) continue;
     result += character;
   }
-  return result;
+  const comparison = findTopLevelRelationalComparison(result);
+  if (!comparison || comparison.left <= comparison.right) return result;
+  const inverted = comparison.operator === "<"
+    ? ">"
+    : comparison.operator === ">"
+      ? "<"
+      : comparison.operator === "<="
+        ? ">="
+        : "<=";
+  return `${comparison.right}${inverted}${comparison.left}`;
+}
+
+function findTopLevelRelationalComparison(value: string): {
+  left: string;
+  operator: "<" | ">" | "<=" | ">=";
+  right: string;
+} | undefined {
+  const comparisons: Array<{ index: number; operator: "<" | ">" | "<=" | ">=" }> = [];
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quoted && character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (quoted) continue;
+    if (character === "(") {
+      depth += 1;
+      continue;
+    }
+    if (character === ")") {
+      depth -= 1;
+      continue;
+    }
+    if (depth !== 0 || (character !== "<" && character !== ">")) continue;
+    const operator = value[index + 1] === "=" ? `${character}=` : character;
+    comparisons.push({ index, operator: operator as "<" | ">" | "<=" | ">=" });
+    if (operator.length === 2) index += 1;
+  }
+  if (comparisons.length !== 1) return undefined;
+  const comparison = comparisons[0];
+  if (!comparison) return undefined;
+  const { index, operator } = comparison;
+  const left = value.slice(0, index);
+  const right = value.slice(index + operator.length);
+  if (left.length === 0 || right.length === 0) return undefined;
+  return { left, operator, right };
+}
+
+function splitConditionArguments(value: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let quoted = false;
+  let start = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === '"' && value[index - 1] !== "\\") quoted = !quoted;
+    if (quoted) continue;
+    if (character === "(") depth += 1;
+    if (character === ")") depth -= 1;
+    if (character === "," && depth === 0) {
+      parts.push(value.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  parts.push(value.slice(start).trim());
+  return parts;
+}
+
+export function normalizeConditionNotation(input: string): string {
+  let value = input.trim()
+    .replace(/\bcrossedAbove\s*\(/g, "crossAbove(")
+    .replace(/\bcrossedBelow\s*\(/g, "crossBelow(");
+  const timeframeCross = /^timeframe\("(1m|15m|1h|4h)"\)\.(crossAbove|crossBelow)\((.*)\)$/.exec(value);
+  if (timeframeCross) {
+    const interval = timeframeCross[1] ?? "";
+    const name = timeframeCross[2] ?? "";
+    const argumentsText = timeframeCross[3] ?? "";
+    const args = splitConditionArguments(argumentsText).map((argument) =>
+      /^timeframe\(/.test(argument) ? argument : `timeframe("${interval}").${argument}`
+    );
+    value = `${name}(${args.join(",")})`;
+  }
+  return value;
 }
 
 export function canonicalRule(rule: ContractRule): string {
@@ -97,7 +190,7 @@ export function normalizeContract(contract: StrategyContract): StrategyContract 
   return {
     ...contract,
     rules: contract.rules
-      .map((rule) => ({ ...rule, when: [...new Set(rule.when)].sort() }))
+      .map((rule) => ({ ...rule, when: [...new Set(rule.when.map(normalizeConditionNotation))].sort() }))
       .sort((left, right) => canonicalRule(left).localeCompare(canonicalRule(right))),
     unsupportedCapabilities: [...new Set(contract.unsupportedCapabilities)].sort(),
   };
@@ -110,4 +203,42 @@ export function readyContract(timeframe: ContractTimeframe, rules: ContractRule[
     rules,
     unsupportedCapabilities: [],
   });
+}
+
+export function compareStrategyContracts(
+  expectedInput: StrategyContract,
+  actualInput: StrategyContract,
+): SemanticDiagnostic[] {
+  const expected = normalizeContract(expectedInput);
+  const actual = normalizeContract(actualInput);
+  const diagnostics: SemanticDiagnostic[] = [];
+  if (actual.timeframe !== expected.timeframe) diagnostics.push({
+    code: "CONTRACT_TIMEFRAME_MISMATCH",
+    message: "Generated contract uses a different evaluation timeframe.",
+    expected: expected.timeframe,
+    actual: actual.timeframe,
+  });
+  if (actual.unsupportedCapabilities.length > 0) diagnostics.push({
+    code: "UNEXPECTED_UNSUPPORTED_CAPABILITY",
+    message: "Generated contract marked capabilities unsupported for a supported golden intent.",
+    expected: "[]",
+    actual: JSON.stringify(actual.unsupportedCapabilities),
+  });
+  const expectedRules = new Set(expected.rules.map(canonicalRule));
+  const actualRules = new Set(actual.rules.map(canonicalRule));
+  for (const rule of expectedRules) {
+    if (!actualRules.has(rule)) diagnostics.push({
+      code: "MISSING_GOLDEN_RULE",
+      message: "Generated contract is missing a rule required by the golden intent.",
+      expected: rule,
+    });
+  }
+  for (const rule of actualRules) {
+    if (!expectedRules.has(rule)) diagnostics.push({
+      code: "UNEXPECTED_GENERATED_RULE",
+      message: "Generated contract contains a rule not present in the golden intent.",
+      actual: rule,
+    });
+  }
+  return diagnostics;
 }

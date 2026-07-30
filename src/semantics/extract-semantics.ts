@@ -218,6 +218,15 @@ function decisionFromReturn(statement: ts.ReturnStatement): ContractDecision | u
 
 function collectVariables(node: ts.Node, variables: Variables): void {
   if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) variables.set(node.name.text, node.initializer);
+  if (ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name) && node.initializer) {
+    for (const element of node.name.elements) {
+      if (!ts.isIdentifier(element.name)) continue;
+      const sourceName = element.propertyName && (ts.isIdentifier(element.propertyName) || ts.isStringLiteral(element.propertyName))
+        ? element.propertyName.text
+        : element.name.text;
+      variables.set(element.name.text, ts.factory.createPropertyAccessExpression(node.initializer, sourceName));
+    }
+  }
   ts.forEachChild(node, (child) => collectVariables(child, variables));
 }
 

@@ -128,16 +128,16 @@ function applyCondition(scenario: StrategySemanticScenario, condition: string, s
     if (args.length !== 4) return false;
     const above = cross[1] === "crossAbove";
     const values = satisfied
-      ? above ? [2, 0, 1, 1] : [0, 2, 1, 1]
-      : above ? [0, 2, 1, 1] : [2, 0, 1, 1];
+      ? above ? [3, 1, 2, 2] : [1, 3, 2, 2]
+      : above ? [1, 3, 2, 2] : [3, 1, 2, 2];
     args.forEach((operand, index) => setOperand(scenario, operand, values[index] ?? 0));
     return true;
   }
-  const comparison = /^(.+?)\s+(==|!=|<=|>=|<|>)\s+(.+)$/.exec(condition);
+  const comparison = /^(.+?)(==|!=|<=|>=|<|>)(.+)$/.exec(condition);
   if (!comparison) return false;
-  const left = comparison[1] ?? "";
+  const left = comparison[1]?.trim() ?? "";
   const operator = comparison[2] ?? "";
-  const right = comparison[3] ?? "";
+  const right = comparison[3]?.trim() ?? "";
   const literal = parsedLiteral(right);
   if (literal !== undefined) {
     if (typeof literal === "string") {

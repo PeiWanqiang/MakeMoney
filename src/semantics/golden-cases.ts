@@ -33,13 +33,15 @@ const closeDecision: ContractDecision = {
   type: "close", side: null, sizeKind: null, sizeValue: null, stopLossPercent: null, takeProfitRiskReward: null,
 };
 
-function intents(chinese: string, english: string): GoldenStrategyCase["intents"] {
+function intents(chinese: string, english: string, executionChinese: string, executionEnglish: string): GoldenStrategyCase["intents"] {
+  const completeChinese = `${chinese}；${executionChinese}`;
+  const completeEnglish = `${english} ${executionEnglish}`;
   return [
-    chinese,
-    `严格按以下规则执行，不要添加额外条件：${chinese}`,
-    `帮我做一个策略：${chinese}`,
-    english,
-    `Use closed bars and do not add filters. ${english}`,
+    completeChinese,
+    `严格按以下规则执行，不要添加额外条件：${completeChinese}`,
+    `帮我做一个策略：${completeChinese}`,
+    completeEnglish,
+    `Use closed bars and do not add filters. ${completeEnglish}`,
   ];
 }
 
@@ -48,6 +50,14 @@ function golden(input: GoldenInput): GoldenStrategyCase {
   const sizeValue = input.sizeValue ?? 0.01;
   const stopLossPercent = input.stopLossPercent ?? 0.05;
   const takeProfit = input.takeProfitRiskReward;
+  const sizeChinese = sizeKind === "riskPercent"
+    ? `每次交易按账户权益风险${sizeValue * 100}%`
+    : `每次使用固定名义仓位${sizeValue}`;
+  const sizeEnglish = sizeKind === "riskPercent"
+    ? `Risk ${sizeValue * 100}% of account equity per trade`
+    : `Use fixed notional size ${sizeValue} per trade`;
+  const executionChinese = `${sizeChinese}，止损${stopLossPercent * 100}%，${takeProfit === undefined ? "不设置额外止盈" : `止盈为${takeProfit}R`}`;
+  const executionEnglish = `${sizeEnglish}, use a ${stopLossPercent * 100}% stop, and ${takeProfit === undefined ? "do not add a separate take-profit" : `take profit at ${takeProfit}R`}.`;
   const openDecision: ContractDecision = {
     type: "open",
     side: input.side,
@@ -97,7 +107,7 @@ ${exitSource}
         decision: closeDecision,
       },
     ]),
-    intents: intents(input.chinese, input.english),
+    intents: intents(input.chinese, input.english, executionChinese, executionEnglish),
   };
 }
 
@@ -126,7 +136,7 @@ export const GOLDEN_STRATEGY_CASES: GoldenStrategyCase[] = [
   }),
   golden({
     id: "sma-10-30-long", title: "SMA 10/30 Long Crossover", timeframe: "1h", side: "long",
-    chinese: "1小时10日简单均线上穿30日简单均线做多，死叉退出", english: "Go long on the 1h SMA 10/30 bullish crossover and exit on the bearish crossover.",
+    chinese: "1小时10周期简单均线上穿30周期简单均线做多，死叉退出", english: "Go long on the 1h SMA 10/30 bullish crossover and exit on the bearish crossover.",
     declarations: 'const fast = ctx.indicators.sma("close", 10);\nconst fastPrevious = ctx.indicators.sma("close", 10, 1);\nconst slow = ctx.indicators.sma("close", 30);\nconst slowPrevious = ctx.indicators.sma("close", 30, 1);',
     entry: [smaCross(10, 30, "Above")], exit: [smaCross(10, 30, "Below")],
   }),
@@ -165,14 +175,14 @@ export const GOLDEN_STRATEGY_CASES: GoldenStrategyCase[] = [
   }),
   golden({
     id: "donchian-long", title: "Donchian Long Breakout", timeframe: "4h", side: "long", takeProfitRiskReward: 2,
-    chinese: "4小时收盘突破前20根最高价做多，跌破前10根最低价退出，止盈风险收益比2", english: "On 4h bars, go long above the prior 20-bar high and exit below the prior 10-bar low, with 2R take profit.",
+    chinese: "4小时收盘价高于前20根最高价做多，收盘价低于前10根最低价退出，止盈风险收益比2", english: "On 4h bars, go long when the close is above the prior 20-bar high and exit when the close is below the prior 10-bar low, with 2R take profit.",
     declarations: 'const upper = ctx.indicators.highest("high", 20, 1);\nconst lower = ctx.indicators.lowest("low", 10, 1);\nif (upper === null || lower === null) return { type: "hold" };',
     entry: [{ source: "ctx.market.close > upper", contract: 'market.close > highest("high",20,1)' }],
     exit: [{ source: "ctx.market.close < lower", contract: 'market.close < lowest("low",10,1)' }],
   }),
   golden({
     id: "donchian-short", title: "Donchian Short Breakout", timeframe: "4h", side: "short", takeProfitRiskReward: 2,
-    chinese: "4小时收盘跌破前20根最低价做空，突破前10根最高价退出", english: "On 4h bars, short below the prior 20-bar low and exit above the prior 10-bar high.",
+    chinese: "4小时收盘价低于前20根最低价做空，收盘价高于前10根最高价退出", english: "On 4h bars, short when the close is below the prior 20-bar low and exit when the close is above the prior 10-bar high.",
     declarations: 'const lower = ctx.indicators.lowest("low", 20, 1);\nconst upper = ctx.indicators.highest("high", 10, 1);\nif (upper === null || lower === null) return { type: "hold" };',
     entry: [{ source: "ctx.market.close < lower", contract: 'market.close < lowest("low",20,1)' }],
     exit: [{ source: "ctx.market.close > upper", contract: 'market.close > highest("high",10,1)' }],
@@ -186,21 +196,21 @@ export const GOLDEN_STRATEGY_CASES: GoldenStrategyCase[] = [
   }),
   golden({
     id: "momentum-short", title: "20-Bar Momentum Short", timeframe: "1h", side: "short",
-    chinese: "1小时20周期跌幅超过5%做空，动量回到0以上退出", english: "On 1h bars, short when 20-bar return is below -5% and exit when it rises above zero.",
+    chinese: "1小时20周期收益率低于-5%做空，20周期收益率回到0以上退出", english: "On 1h bars, short when 20-bar return is below -5% and exit when the same 20-bar return rises above zero.",
     declarations: 'const momentum = ctx.indicators.percentChange("close", 20);\nif (momentum === null) return { type: "hold" };',
     entry: [{ source: "momentum < -0.05", contract: 'percentChange("close",20) < -0.05' }],
     exit: [{ source: "momentum > 0", contract: 'percentChange("close",20) > 0' }],
   }),
   golden({
     id: "mean-reversion-long", title: "Dip Mean Reversion Long", timeframe: "1h", side: "long",
-    chinese: "1小时10周期跌幅超过5%后做多，价格恢复到10周期前水平时退出", english: "On 1h bars, buy after a 10-bar loss greater than 5% and exit when the 10-bar return recovers to zero.",
+    chinese: "1小时10周期收益率低于-5%后做多，10周期收益率回到0或以上时退出", english: "On 1h bars, buy when the 10-bar return is below -5% and exit when that return reaches zero or above.",
     declarations: 'const change = ctx.indicators.percentChange("close", 10);\nif (change === null) return { type: "hold" };',
     entry: [{ source: "change < -0.05", contract: 'percentChange("close",10) < -0.05' }],
     exit: [{ source: "change >= 0", contract: 'percentChange("close",10) >= 0' }],
   }),
   golden({
     id: "mean-reversion-short", title: "Spike Mean Reversion Short", timeframe: "1h", side: "short",
-    chinese: "1小时10周期涨幅超过5%后做空，涨幅回落到0时退出", english: "On 1h bars, short after a 10-bar gain greater than 5% and exit when the return falls back to zero.",
+    chinese: "1小时10周期收益率高于5%后做空，10周期收益率回落到0或以下时退出", english: "On 1h bars, short when the 10-bar return is above 5% and exit when that return reaches zero or below.",
     declarations: 'const change = ctx.indicators.percentChange("close", 10);\nif (change === null) return { type: "hold" };',
     entry: [{ source: "change > 0.05", contract: 'percentChange("close",10) > 0.05' }],
     exit: [{ source: "change <= 0", contract: 'percentChange("close",10) <= 0' }],
@@ -221,21 +231,21 @@ export const GOLDEN_STRATEGY_CASES: GoldenStrategyCase[] = [
   }),
   golden({
     id: "bollinger-long", title: "Bollinger Lower-Band Long", timeframe: "1h", side: "long",
-    chinese: "1小时收盘跌破20周期2倍标准差布林下轨做多，回到中轨退出", english: "On 1h bars, go long below the 20-period 2-sigma lower Bollinger band and exit at the middle band.",
+    chinese: "1小时收盘价低于20周期2倍标准差布林下轨做多，收盘价回到中轨或以上退出", english: "On 1h bars, go long when the close is below the 20-period 2-sigma lower Bollinger band and exit when the close is at or above the middle band.",
     declarations: 'const bands = ctx.indicators.bollingerBands("close", 20, 2);\nif (bands === null) return { type: "hold" };',
     entry: [{ source: "ctx.market.close < bands.lower", contract: 'market.close < bollingerBands("close",20,2,0).lower' }],
     exit: [{ source: "ctx.market.close >= bands.middle", contract: 'market.close >= bollingerBands("close",20,2,0).middle' }],
   }),
   golden({
     id: "bollinger-short", title: "Bollinger Upper-Band Short", timeframe: "1h", side: "short",
-    chinese: "1小时收盘突破20周期2倍标准差布林上轨做空，回到中轨退出", english: "On 1h bars, short above the 20-period 2-sigma upper Bollinger band and exit at the middle band.",
+    chinese: "1小时收盘价高于20周期2倍标准差布林上轨做空，收盘价回到中轨或以下退出", english: "On 1h bars, short when the close is above the 20-period 2-sigma upper Bollinger band and exit when the close is at or below the middle band.",
     declarations: 'const bands = ctx.indicators.bollingerBands("close", 20, 2);\nif (bands === null) return { type: "hold" };',
     entry: [{ source: "ctx.market.close > bands.upper", contract: 'market.close > bollingerBands("close",20,2,0).upper' }],
     exit: [{ source: "ctx.market.close <= bands.middle", contract: 'market.close <= bollingerBands("close",20,2,0).middle' }],
   }),
   golden({
     id: "macd-long", title: "MACD Histogram Long", timeframe: "4h", side: "long",
-    chinese: "4小时MACD(12,26,9)柱线大于0做多，小于0退出", english: "On 4h bars, go long when the MACD 12/26/9 histogram is positive and exit when it turns negative.",
+    chinese: "4小时MACD(12,26,9)柱线大于0做多，小于0退出", english: "On 4h bars, go long when the MACD 12/26/9 histogram is above zero and exit when it is below zero.",
     declarations: 'const macd = ctx.indicators.macd("close", 12, 26, 9);\nif (macd === null) return { type: "hold" };',
     entry: [{ source: "macd.histogram > 0", contract: 'macd("close",12,26,9,0).histogram > 0' }],
     exit: [{ source: "macd.histogram < 0", contract: 'macd("close",12,26,9,0).histogram < 0' }],

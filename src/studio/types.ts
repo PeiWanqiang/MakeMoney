@@ -29,6 +29,16 @@ export interface StrategyProviderResponse {
   provider: string;
   model: string;
   responseId?: string;
+  usage?: ProviderTokenUsage;
+}
+
+export interface ProviderTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cachedInputTokens?: number;
+  uncachedInputTokens?: number;
+  reasoningTokens?: number;
 }
 
 export interface StrategyProgramProvider {
@@ -89,6 +99,7 @@ export interface StrategyVersionArtifact {
     model: string;
     responseId?: string;
     repairCount: number;
+    usage?: ProviderTokenUsage;
   };
   failedCompilationAttempts: CompilationAttempt[];
   evaluation?: StrategyEvaluation;

@@ -57,6 +57,16 @@ export class OpenAIStrategyProgramProvider implements StrategyProgramProvider {
       provider: "openai",
       model: this.model,
       responseId: response.id,
+      ...(response.usage === undefined ? {} : {
+        usage: {
+          inputTokens: response.usage.input_tokens,
+          outputTokens: response.usage.output_tokens,
+          totalTokens: response.usage.total_tokens,
+          cachedInputTokens: response.usage.input_tokens_details.cached_tokens,
+          uncachedInputTokens: Math.max(0, response.usage.input_tokens - response.usage.input_tokens_details.cached_tokens),
+          reasoningTokens: response.usage.output_tokens_details.reasoning_tokens,
+        },
+      }),
     };
   }
 }

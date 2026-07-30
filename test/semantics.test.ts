@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { emaTrendStrategy } from "../examples/strategies.js";
-import { readyContract, type ContractDecision } from "../src/semantics/contract.js";
+import {
+  compareStrategyContracts,
+  normalizeContract,
+  readyContract,
+  type ContractDecision,
+} from "../src/semantics/contract.js";
 import { extractStrategySemantics } from "../src/semantics/extract-semantics.js";
 import { evaluateStrategyMutations } from "../src/semantics/mutation-testing.js";
 import { verifyStrategySemantics } from "../src/semantics/verify-semantics.js";
@@ -125,5 +130,55 @@ describe("strategy semantic verification", () => {
     const report = await verifyStrategySemantics(emaTrendStrategy, spaced);
     expect(report.diagnostics).toEqual([]);
     expect(report.ok).toBe(true);
+  });
+
+  it("normalizes common model spellings of cross conditions", () => {
+    const normalized = normalizeContract(readyContract("15m", [{
+      when: [
+        'position.side == "flat"',
+        'timeframe("1h").crossedAbove(ema("close",20,0), ema("close",20,1), ema("close",50,0), ema("close",50,1))',
+      ],
+      decision: openLong,
+    }]));
+    expect(normalized.rules[0]?.when).toContain(
+      'crossAbove(timeframe("1h").ema("close",20,0),timeframe("1h").ema("close",20,1),timeframe("1h").ema("close",50,0),timeframe("1h").ema("close",50,1))',
+    );
+  });
+
+  it("reverse extracts context object destructuring", async () => {
+    const source = emaTrendStrategy
+      .replace("onBar(ctx) {", "onBar(context) { const { position, indicators } = context;")
+      .replaceAll("ctx.indicators", "indicators")
+      .replaceAll("ctx.position", "position")
+      .replaceAll("ctx.crossed", "context.crossed");
+    const report = await verifyStrategySemantics(source, contract);
+    expect(report.diagnostics).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
+  it("runs compact comparisons with positive-valued cross scenarios", async () => {
+    const guarded = emaTrendStrategy.replace(
+      'const fastPrevious = ctx.indicators.ema("close", 20, 1);',
+      'const fastPrevious = ctx.indicators.ema("close", 20, 1);\n    if (!fastPrevious) return { type: "hold" };',
+    );
+    const compact = readyContract("4h", contract.rules.map((rule) => ({
+      ...rule,
+      when: rule.when.map((condition) => condition.replaceAll(" == ", "==")),
+    })));
+    const report = await verifyStrategySemantics(guarded, compact);
+    expect(report.diagnostics).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
+  it("treats reversed relational operands as the same condition", () => {
+    const expected = readyContract("4h", [{
+      when: ['market.close < bollingerBands("close",20,2,0).lower'],
+      decision: openLong,
+    }]);
+    const reversed = readyContract("4h", [{
+      when: ['bollingerBands("close",20,2,0).lower > market.close'],
+      decision: openLong,
+    }]);
+    expect(compareStrategyContracts(expected, reversed)).toEqual([]);
   });
 });

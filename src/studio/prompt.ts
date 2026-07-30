@@ -35,7 +35,16 @@ The audit contract is not executable. It must list every open/close rule using c
 - for a different data timeframe use a prefix, for example timeframe("1h").rsi("close",14,0) < 30
 Sort is not required. Do not include reason text or warm-up/null guards as rules. Every decision field is required; use null for fields that do not apply.
 
+Canonical notation is exact: use crossAbove/crossBelow, never crossedAbove/crossedBelow in the audit contract. For multi-timeframe crosses, prefix every indicator operand as shown by the timeframe RSI example; do not write timeframe("1h").crossAbove(...). A close decision must be exactly {"type":"close","side":null,"sizeKind":null,"sizeValue":null,"stopLossPercent":null,"takeProfitRiskReward":null}.
+
+Preserve level conditions versus crossing events exactly:
+- "above", "below", "高于", "低于" mean a current-value comparison such as market.close > ema(...), not a cross;
+- "crosses above", "crosses below", "上穿", "下穿", "金叉", "死叉" mean crossAbove/crossBelow using current and previous values.
+- never add a previous-bar, deduplication, cooldown, state, or timing filter unless the user requested it.
+
 contract.timeframe is the schedule on which onBar runs. If the whole strategy is 1h, set contract.timeframe to 1h and use context.indicators directly. Use context.timeframe("1h") only when onBar runs on another schedule, for example contract.timeframe 15m while signals use closed 1h data. Prefer direct context.position.side checks instead of aliases so audit extraction remains obvious.
+
+Every context and context.timeframe(...) view contains closed bars only. Offset 0 is the most recent closed bar, offset 1 is the immediately preceding closed bar. Never shift to offsets 1/2 merely because the user emphasized "closed" bars.
 
 Return JSON with exactly these fields:
 {"status":"ready","source":"defineStrategy({...})","contract":{"schemaVersion":"1.0","timeframe":"4h","rules":[{"when":["position.side == \\"flat\\""],"decision":{"type":"open","side":"long","sizeKind":"riskPercent","sizeValue":0.01,"stopLossPercent":0.05,"takeProfitRiskReward":null}}],"unsupportedCapabilities":[]},"explanation":"...","assumptions":["..."],"warnings":[],"changeSummary":"..."}
