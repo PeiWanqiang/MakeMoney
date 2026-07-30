@@ -168,14 +168,14 @@ export const GOLDEN_STRATEGY_CASES: GoldenStrategyCase[] = [
   }),
   golden({
     id: "price-sma-short", title: "Price Below SMA 100", timeframe: "4h", side: "short",
-    chinese: "4小时收盘价低于100 SMA时做空，重新站上均线平仓", english: "On 4h bars, short when close is below SMA 100 and close when price moves back above it.",
+    chinese: "4小时收盘价低于100 SMA时做空，收盘价高于均线时平仓；这是当前值条件，不要求发生上穿", english: "On 4h bars, short while close is below SMA 100 and close while the current close is above it; these are level conditions, not crossing events.",
     declarations: 'const baseline = ctx.indicators.sma("close", 100);\nif (baseline === null) return { type: "hold" };',
     entry: [{ source: "ctx.market.close < baseline", contract: 'market.close < sma("close",100,0)' }],
     exit: [{ source: "ctx.market.close > baseline", contract: 'market.close > sma("close",100,0)' }],
   }),
   golden({
     id: "donchian-long", title: "Donchian Long Breakout", timeframe: "4h", side: "long", takeProfitRiskReward: 2,
-    chinese: "4小时收盘价高于前20根最高价做多，收盘价低于前10根最低价退出，止盈风险收益比2", english: "On 4h bars, go long when the close is above the prior 20-bar high and exit when the close is below the prior 10-bar low, with 2R take profit.",
+    chinese: "4小时收盘价高于前20根K线的最高high字段时做多，收盘价低于前10根K线的最低low字段时退出，止盈风险收益比2", english: "On 4h bars, go long when the close is above the highest OHLC high field of the prior 20 bars and exit when the close is below the lowest OHLC low field of the prior 10 bars, with 2R take profit.",
     declarations: 'const upper = ctx.indicators.highest("high", 20, 1);\nconst lower = ctx.indicators.lowest("low", 10, 1);\nif (upper === null || lower === null) return { type: "hold" };',
     entry: [{ source: "ctx.market.close > upper", contract: 'market.close > highest("high",20,1)' }],
     exit: [{ source: "ctx.market.close < lower", contract: 'market.close < lowest("low",10,1)' }],

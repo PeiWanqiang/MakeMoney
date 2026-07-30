@@ -59,7 +59,7 @@ npm run semantics:golden
 npm run semantics:deepseek -- --limit 100 --concurrency 6
 ```
 
-真实模型评测会记录每条样例的契约差异、修复次数、延迟、token 和估算成本，默认写入 Git 已忽略的 `data/reports/semantic-evals/`。首轮全量基线为 86/100；修复生成提示、语料歧义和验证器误报后，全部 14 条失败样例的定向回归为 14/14。该结果来自合成表达，完整 V3 全量重跑和真实用户语料评测仍未完成。
+真实模型评测会记录每条样例的契约差异、修复次数、延迟、token 和估算成本，默认写入 Git 已忽略的 `data/reports/semantic-evals/`。DeepSeek V4 Pro 的全量结果由 V2 的 86/100、V3 的 94/100 提升到 V4 的 100/100；V4 中有 21 条经过自动修复，0 条契约错配、生成错误或 provider 错误。该结果只来自固定合成表达，不能替代真实用户语料、未见测试集和重复运行稳定性评测。
 
 ## 本地数据与回测
 

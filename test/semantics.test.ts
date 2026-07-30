@@ -181,4 +181,16 @@ describe("strategy semantic verification", () => {
     }]);
     expect(compareStrategyContracts(expected, reversed)).toEqual([]);
   });
+
+  it("normalizes SDK object prefixes out of audit conditions", () => {
+    const prefixed = readyContract("1h", [{
+      when: ['position.side == "flat"', 'context.indicators.percentChange("close",20) < -0.05'],
+      decision: openLong,
+    }]);
+    expect(prefixed.rules[0]?.when).toContain('percentChange("close",20) < -0.05');
+    expect(compareStrategyContracts(prefixed, readyContract("1h", [{
+      when: ['position.side == "flat"', 'percentChange("close",20) < -0.05'],
+      decision: openLong,
+    }]))).toEqual([]);
+  });
 });

@@ -164,6 +164,8 @@ function splitConditionArguments(value: string): string[] {
 
 export function normalizeConditionNotation(input: string): string {
   let value = input.trim()
+    .replace(/\bcontext\.indicators\./g, "")
+    .replace(/\bindicators\./g, "")
     .replace(/\bcrossedAbove\s*\(/g, "crossAbove(")
     .replace(/\bcrossedBelow\s*\(/g, "crossBelow(");
   const timeframeCross = /^timeframe\("(1m|15m|1h|4h)"\)\.(crossAbove|crossBelow)\((.*)\)$/.exec(value);

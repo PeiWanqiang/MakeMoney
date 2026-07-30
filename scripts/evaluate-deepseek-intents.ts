@@ -93,7 +93,7 @@ const PRICING = {
   },
 } as const;
 
-const PIPELINE_VERSION = "2026-07-30.3";
+const PIPELINE_VERSION = "2026-07-30.4";
 
 function parsePositiveInteger(value: string | undefined, fallback: number, name: string): number {
   if (value === undefined) return fallback;

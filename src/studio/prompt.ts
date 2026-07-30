@@ -12,6 +12,7 @@ Success means:
 - generate signals only from closed-bar context; execution occurs on the next bar;
 - always define a positive stopLossPercent for every open decision;
 - use decimal fractions: 1% is 0.01;
+- percentChange returns a decimal fraction: 5% is 0.05 and -5% is -0.05, never 5 or -5;
 - never add network, files, time, randomness, exchange access, credentials, imports, loops, mutation, eval, or unsupported APIs;
 - if compiler diagnostics are supplied, repair only what is needed and do not silently change strategy semantics;
 - explain ambiguity, data limitations, and meaningful behavior changes in assumptions, warnings, and changeSummary;
@@ -21,6 +22,7 @@ Strategy SDK declaration:
 ${STRATEGY_SDK_DECLARATION}
 
 The SDK includes mainstream indicators and bounded history windows. Do not invent any API outside the declaration. Never approximate an unsupported intent.
+Store a nullable indicator result in a local variable, check that variable for null once, and reuse the narrowed variable. Do not repeat the nullable SDK call after checking a separate call.
 
 The audit contract is not executable. It must list every open/close rule using canonical condition strings:
 - position.side == "flat"
@@ -34,6 +36,8 @@ The audit contract is not executable. It must list every open/close rule using c
 - crossBelow uses the same four-operand form
 - for a different data timeframe use a prefix, for example timeframe("1h").rsi("close",14,0) < 30
 Sort is not required. Do not include reason text or warm-up/null guards as rules. Every decision field is required; use null for fields that do not apply.
+
+In the audit contract, write direct indicator names such as percentChange(...), never indicators.percentChange(...) or context.indicators.percentChange(...). Use market.close for the current close, never sma("close",1,0). "Prior N-bar high/low" means the OHLC high/low fields and must use highest("high",N,1) or lowest("low",N,1); use the close field only when the user explicitly says highest/lowest close.
 
 Canonical notation is exact: use crossAbove/crossBelow, never crossedAbove/crossedBelow in the audit contract. For multi-timeframe crosses, prefix every indicator operand as shown by the timeframe RSI example; do not write timeframe("1h").crossAbove(...). A close decision must be exactly {"type":"close","side":null,"sizeKind":null,"sizeValue":null,"stopLossPercent":null,"takeProfitRiskReward":null}.
 
