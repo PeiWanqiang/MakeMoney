@@ -136,6 +136,15 @@ npm run intents:review -- submit --file review.json
 
 不同审核者使用不同 `reviewerId` 独立提交。裁决者在同样的数据结构中把 `kind` 改为 `adjudication`，并在 `basedOnReviewIds` 中列出所参考的独立审核 ID。新独立意见提交后，旧裁决会自动失效，避免裁决基于过期意见。
 
+双审完成后计算 disposition 一致率、完整决策一致率和 Cohen's kappa，并生成身份盲化的裁决包：
+
+```bash
+npm run intents:review -- agreement --reviewer-a reviewer-a --reviewer-b reviewer-b
+npm run intents:review -- adjudication-queue --adjudicator adjudicator-1
+```
+
+裁决包优先排列争议案例，隐藏审核者身份和来源元数据，并自动填好全部 `basedOnReviewIds`。
+
 正式黄金集默认要求至少两名不同审核者和一份裁决：
 
 ```bash

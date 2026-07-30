@@ -54,6 +54,22 @@ export interface InternetIntentBlindReviewQueueItem {
   review: InternetIntentReview;
 }
 
+export interface InternetIntentAdjudicationQueueItem {
+  candidate: InternetIntentBlindReviewQueueItem["candidate"];
+  independentReviews: Array<Omit<InternetIntentReview, "reviewerId"> & { reviewerAlias: string }>;
+  disputed: boolean;
+  adjudication: InternetIntentReview;
+}
+
+export interface InternetIntentAgreementReport {
+  paired: number;
+  dispositionAgreements: number;
+  dispositionAgreementRate: number;
+  exactDecisionAgreements: number;
+  exactDecisionAgreementRate: number;
+  cohensKappa: number | null;
+}
+
 export interface InternetIntentGoldenRecord {
   schemaVersion: "1.0";
   id: string;
@@ -224,10 +240,10 @@ function decisionDiagnostics(candidate: InternetIntentCandidate, review: Interne
 }
 
 export function createReviewDraft(candidate: InternetIntentCandidate, reviewerId: string, kind: InternetIntentReview["kind"] = "review"): InternetIntentReview {
-  const safeReviewerId = reviewerId.trim().replace(/[^a-zA-Z0-9_-]+/g, "-");
+  const reviewerHash = sha256(reviewerId.trim()).slice(0, 12);
   return {
     schemaVersion: "1.0",
-    reviewId: `${kind}-${candidate.id}-${safeReviewerId}`,
+    reviewId: `${kind}-${candidate.id}-${reviewerHash}`,
     kind,
     candidateId: candidate.id,
     candidateSha256: candidate.rawSha256,
@@ -310,7 +326,7 @@ export function mergeReview(
   return { ...annotation, reviews, adjudication: null, updatedAt: now };
 }
 
-function reviewSignature(review: InternetIntentReview): string {
+export function reviewDecisionSignature(review: InternetIntentReview): string {
   return JSON.stringify({
     disposition: review.disposition,
     resolvedIntent: review.resolvedIntent?.trim() ?? null,
@@ -318,6 +334,67 @@ function reviewSignature(review: InternetIntentReview): string {
     clarificationQuestions: [...review.clarificationQuestions].sort(),
     unsupportedCapabilities: [...review.unsupportedCapabilities].sort(),
   });
+}
+
+export function calculateReviewAgreement(
+  annotations: InternetIntentAnnotation[],
+  reviewerA: string,
+  reviewerB: string,
+): InternetIntentAgreementReport {
+  const pairs = annotations.flatMap((annotation) => {
+    const left = annotation.reviews.find((review) => review.reviewerId === reviewerA);
+    const right = annotation.reviews.find((review) => review.reviewerId === reviewerB);
+    return left && right ? [{ left, right }] : [];
+  });
+  const dispositions = ["ready", "needs_clarification", "unsupported", "not_strategy"] as const;
+  const dispositionAgreements = pairs.filter(({ left, right }) => left.disposition === right.disposition).length;
+  const exactDecisionAgreements = pairs.filter(({ left, right }) => reviewDecisionSignature(left) === reviewDecisionSignature(right)).length;
+  if (pairs.length === 0) return {
+    paired: 0,
+    dispositionAgreements: 0,
+    dispositionAgreementRate: 0,
+    exactDecisionAgreements: 0,
+    exactDecisionAgreementRate: 0,
+    cohensKappa: null,
+  };
+  const observed = dispositionAgreements / pairs.length;
+  const expected = dispositions.reduce((sum, disposition) => {
+    const left = pairs.filter((pair) => pair.left.disposition === disposition).length / pairs.length;
+    const right = pairs.filter((pair) => pair.right.disposition === disposition).length / pairs.length;
+    return sum + left * right;
+  }, 0);
+  const kappa = expected === 1 ? (observed === 1 ? 1 : 0) : (observed - expected) / (1 - expected);
+  return {
+    paired: pairs.length,
+    dispositionAgreements,
+    dispositionAgreementRate: observed,
+    exactDecisionAgreements,
+    exactDecisionAgreementRate: exactDecisionAgreements / pairs.length,
+    cohensKappa: Math.round(kappa * 10_000) / 10_000,
+  };
+}
+
+export function selectAdjudicationQueue(
+  candidates: InternetIntentCandidate[],
+  annotations: InternetIntentAnnotation[],
+  adjudicatorId: string,
+): InternetIntentAdjudicationQueueItem[] {
+  const byCandidate = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+  return annotations
+    .filter((annotation) => annotation.reviews.length >= 2 && !annotation.adjudication)
+    .map((annotation) => {
+      const candidate = byCandidate.get(annotation.candidateId);
+      if (!candidate) throw new Error(`Candidate ${annotation.candidateId} is missing.`);
+      const adjudication = createReviewDraft(candidate, adjudicatorId, "adjudication");
+      adjudication.basedOnReviewIds = annotation.reviews.map((review) => review.reviewId).sort();
+      return {
+        candidate: blindReviewQueueItem({ candidate, review: adjudication }).candidate,
+        independentReviews: annotation.reviews.map(({ reviewerId: _reviewerId, ...review }, index) => ({ ...review, reviewerAlias: `reviewer-${index + 1}` })),
+        disputed: new Set(annotation.reviews.map(reviewDecisionSignature)).size > 1,
+        adjudication,
+      };
+    })
+    .sort((left, right) => Number(right.disputed) - Number(left.disputed) || left.candidate.id.localeCompare(right.candidate.id));
 }
 
 export function selectReviewQueue(
@@ -410,7 +487,7 @@ export function buildGoldenCorpus(
       const diagnostics = validateReview(candidate, review);
       if (diagnostics.length > 0) throw new Error(`Stored review ${review.reviewId} is invalid: ${diagnostics.join(" ")}`);
     }
-    const signatures = new Set(annotation.reviews.map(reviewSignature));
+    const signatures = new Set(annotation.reviews.map(reviewDecisionSignature));
     if (signatures.size > 1 && !annotation.adjudication) throw new Error(`Annotation ${annotation.annotationId} has reviewer disagreement and needs adjudication.`);
     if (requireAdjudication && !annotation.adjudication) throw new Error(`Annotation ${annotation.annotationId} requires adjudication.`);
     const resolution = annotation.adjudication ?? annotation.reviews[0];

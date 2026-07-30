@@ -5,8 +5,10 @@ import { readJsonLines, writeJsonLinesAtomic } from "../src/internet-intents/pip
 import {
   buildGoldenCorpus,
   blindReviewQueueItem,
+  calculateReviewAgreement,
   mergeReview,
   parseReview,
+  selectAdjudicationQueue,
   selectReviewQueue,
   type InternetIntentAnnotation,
   type InternetIntentReview,
@@ -121,6 +123,29 @@ if (command === "queue") {
   const candidates = await readJsonLines<InternetIntentCandidate>(candidatesPath);
   const annotations = await readJsonLines<InternetIntentAnnotation>(annotationsPath);
   console.log(JSON.stringify({ candidates: candidates.length, pending: candidates.length - annotations.length, ...countAnnotations(annotations) }, null, 2));
+} else if (command === "agreement") {
+  const reviewerA = args.get("reviewer-a");
+  const reviewerB = args.get("reviewer-b");
+  if (!reviewerA || !reviewerB) throw new Error("agreement requires --reviewer-a ID and --reviewer-b ID.");
+  const annotations = await readJsonLines<InternetIntentAnnotation>(annotationsPath);
+  console.log(JSON.stringify({ reviewerA, reviewerB, ...calculateReviewAgreement(annotations, reviewerA, reviewerB) }, null, 2));
+} else if (command === "adjudication-queue") {
+  const adjudicator = args.get("adjudicator");
+  if (!adjudicator) throw new Error("adjudication-queue requires --adjudicator ID.");
+  const candidates = await readJsonLines<InternetIntentCandidate>(candidatesPath);
+  const annotations = await readJsonLines<InternetIntentAnnotation>(annotationsPath);
+  const items = selectAdjudicationQueue(candidates, annotations, adjudicator);
+  const output = resolve(args.get("output") ?? `data/internet-intents/review/adjudication-${adjudicator}.json`);
+  await writeJsonAtomic(output, {
+    schemaVersion: "1.0",
+    generatedAt: new Date().toISOString(),
+    adjudicator,
+    count: items.length,
+    disputed: items.filter((item) => item.disputed).length,
+    instructions: "Resolve disputed cases first. Reviewer identities and source metadata are hidden. Submit the completed adjudication object with the normal submit command.",
+    items,
+  });
+  console.log(JSON.stringify({ command, output, count: items.length, disputed: items.filter((item) => item.disputed).length }, null, 2));
 } else if (command === "export") {
   const candidates = await readJsonLines<InternetIntentCandidate>(candidatesPath);
   const annotations = await readJsonLines<InternetIntentAnnotation>(annotationsPath);
@@ -143,6 +168,8 @@ if (command === "queue") {
   npm run intents:review -- queue --reviewer ID [--limit 25] [--blind true] [--output PATH]
   npm run intents:review -- submit --file REVIEW.json
   npm run intents:review -- stats
+  npm run intents:review -- agreement --reviewer-a ID --reviewer-b ID
+  npm run intents:review -- adjudication-queue --adjudicator ID
   npm run intents:review -- export [--minimum-reviewers 2] [--require-adjudication true]
 
 All commands accept --candidates PATH and --annotations PATH.`);

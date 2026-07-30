@@ -4,9 +4,11 @@ import { sha256 } from "../src/internet-intents/pipeline.js";
 import {
   buildGoldenCorpus,
   blindReviewQueueItem,
+  calculateReviewAgreement,
   createReviewDraft,
   mergeReview,
   selectReviewQueue,
+  selectAdjudicationQueue,
   splitForCandidate,
   validateReview,
   type InternetIntentAnnotation,
@@ -144,5 +146,31 @@ describe("internet intent review", () => {
     expect(blind.candidate).not.toHaveProperty("sourceUrl");
     expect(blind.candidate).not.toHaveProperty("author");
     expect(blind.candidate).not.toHaveProperty("relevance");
+  });
+
+  it("measures independent agreement and builds identity-blind adjudication cases", () => {
+    const item = candidate("disputed");
+    const first = submittedReview(item, "alice");
+    const second = {
+      ...submittedReview(item, "bob"),
+      disposition: "needs_clarification" as const,
+      resolvedIntent: null,
+      contract: null,
+      clarificationQuestions: ["Which position size should be used?"],
+    };
+    let annotation = mergeReview(item, undefined, first);
+    annotation = mergeReview(item, annotation, second);
+    expect(calculateReviewAgreement([annotation], "alice", "bob")).toMatchObject({
+      paired: 1,
+      dispositionAgreements: 0,
+      exactDecisionAgreements: 0,
+      cohensKappa: 0,
+    });
+    const queue = selectAdjudicationQueue([item], [annotation], "carol");
+    expect(queue).toHaveLength(1);
+    expect(queue[0]?.disputed).toBe(true);
+    expect(queue[0]?.independentReviews.map((review) => review.reviewerAlias)).toEqual(["reviewer-1", "reviewer-2"]);
+    expect(queue[0]?.independentReviews[0]).not.toHaveProperty("reviewerId");
+    expect(queue[0]?.adjudication.basedOnReviewIds).toEqual([first.reviewId, second.reviewId].sort());
   });
 });
