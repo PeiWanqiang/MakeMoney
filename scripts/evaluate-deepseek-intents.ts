@@ -10,6 +10,7 @@ import {
   StrategyGenerationError,
   StrategyNeedsClarificationError,
   StrategyStudio,
+  StrategyUnsupportedError,
 } from "../src/studio/strategy-studio.js";
 import type {
   ProviderTokenUsage,
@@ -54,7 +55,7 @@ interface EvaluationResult {
   caseId: string;
   intentIndex: number;
   intent: string;
-  status: "passed" | "gold_mismatch" | "needs_clarification" | "generation_error" | "provider_error";
+  status: "passed" | "gold_mismatch" | "needs_clarification" | "unsupported" | "generation_error" | "provider_error";
   startedAt: string;
   durationMs: number;
   model: string;
@@ -226,6 +227,7 @@ function summarize(results: EvaluationResult[]) {
     passRate: results.length === 0 ? 0 : results.filter((result) => result.status === "passed").length / results.length,
     goldMismatch: results.filter((result) => result.status === "gold_mismatch").length,
     needsClarification: results.filter((result) => result.status === "needs_clarification").length,
+    unsupported: results.filter((result) => result.status === "unsupported").length,
     generationError: results.filter((result) => result.status === "generation_error").length,
     providerError: results.filter((result) => result.status === "provider_error").length,
     repairs: results.reduce((sum, result) => sum + (result.repairCount ?? 0), 0),
@@ -364,6 +366,12 @@ async function evaluate(item: EvaluationItem): Promise<EvaluationResult> {
     if (error instanceof StrategyNeedsClarificationError) return {
       ...common,
       status: "needs_clarification",
+      actualContract: error.response.artifact.contract,
+      error: error.message,
+    };
+    if (error instanceof StrategyUnsupportedError) return {
+      ...common,
+      status: "unsupported",
       actualContract: error.response.artifact.contract,
       error: error.message,
     };

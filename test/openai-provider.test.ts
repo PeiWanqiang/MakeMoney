@@ -12,6 +12,7 @@ describe("OpenAI strategy provider", () => {
         status: "ready",
         source: thresholdStrategy,
         contract: { schemaVersion: "1.0", timeframe: "4h", rules: [], unsupportedCapabilities: [] },
+        clarificationQuestions: [],
         explanation: "Threshold entry and exit.",
         assumptions: ["One-hour closed bars."],
         warnings: [],

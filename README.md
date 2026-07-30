@@ -74,6 +74,9 @@ npm run intents:filter -- --minimum-score 0.3 --near-threshold 0.9
 # 生成可审计人工审核队列；AI 双路建议只供参考，不会写入正式标注
 npm run intents:review -- queue --reviewer reviewer-1 --limit 25
 npm run intents:suggest -- --limit 25 --concurrency 2
+
+# 黄金集冻结后运行真实意图整体引擎评测（默认不碰盲测集）
+npm run intents:evaluate -- --split development --concurrency 2
 ```
 
 数据默认写入 Git 已忽略的 `data/internet-intents/`。完整来源边界、格式和验证结果见[互联网策略意图语料库](docs/INTERNET_INTENT_CORPUS.md)。

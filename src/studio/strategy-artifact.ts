@@ -6,7 +6,7 @@ export const STRATEGY_OUTPUT_SCHEMA = {
   additionalProperties: false,
   properties: {
     source: { type: "string" },
-    status: { type: "string", enum: ["ready", "needs_clarification"] },
+    status: { type: "string", enum: ["ready", "needs_clarification", "unsupported"] },
     contract: {
       type: "object",
       additionalProperties: false,
@@ -42,11 +42,12 @@ export const STRATEGY_OUTPUT_SCHEMA = {
       required: ["schemaVersion", "timeframe", "rules", "unsupportedCapabilities"],
     },
     explanation: { type: "string" },
+    clarificationQuestions: { type: "array", items: { type: "string" } },
     assumptions: { type: "array", items: { type: "string" } },
     warnings: { type: "array", items: { type: "string" } },
     changeSummary: { type: "string" },
   },
-  required: ["status", "source", "contract", "explanation", "assumptions", "warnings", "changeSummary"],
+  required: ["status", "source", "contract", "clarificationQuestions", "explanation", "assumptions", "warnings", "changeSummary"],
 } as const;
 
 export function parseStrategyModelArtifact(text: string): StrategyModelArtifact {
@@ -58,7 +59,7 @@ export function parseStrategyModelArtifact(text: string): StrategyModelArtifact 
   }
   if (!value || typeof value !== "object") throw new Error("The model returned an invalid strategy artifact.");
   const artifact = value as Record<string, unknown>;
-  if (artifact.status !== "ready" && artifact.status !== "needs_clarification") {
+  if (artifact.status !== "ready" && artifact.status !== "needs_clarification" && artifact.status !== "unsupported") {
     throw new Error("The model response has an invalid 'status'.");
   }
   for (const field of ["source", "explanation", "changeSummary"]) {
@@ -74,9 +75,24 @@ export function parseStrategyModelArtifact(text: string): StrategyModelArtifact 
   ) {
     throw new Error("The model response has an invalid strategy contract.");
   }
-  if (artifact.status === "ready" && (artifact.source as string).length === 0) throw new Error("A ready artifact requires strategy source.");
-  if (artifact.status === "needs_clarification" && contract.unsupportedCapabilities.length === 0) {
-    throw new Error("A clarification artifact must identify unsupported capabilities.");
+  if (!Array.isArray(artifact.clarificationQuestions) || !artifact.clarificationQuestions.every((item) => typeof item === "string" && item.trim().length > 0)) {
+    throw new Error("The model response has an invalid 'clarificationQuestions' list.");
+  }
+  if (artifact.status === "ready") {
+    if ((artifact.source as string).length === 0) throw new Error("A ready artifact requires strategy source.");
+    if (artifact.clarificationQuestions.length > 0 || contract.unsupportedCapabilities.length > 0) {
+      throw new Error("A ready artifact cannot contain clarification questions or unsupported capabilities.");
+    }
+  }
+  if (artifact.status === "needs_clarification") {
+    if ((artifact.source as string).length > 0) throw new Error("A clarification artifact cannot contain strategy source.");
+    if (artifact.clarificationQuestions.length === 0) throw new Error("A clarification artifact must contain questions.");
+    if (contract.unsupportedCapabilities.length > 0) throw new Error("A clarification artifact cannot contain unsupported capabilities.");
+  }
+  if (artifact.status === "unsupported") {
+    if ((artifact.source as string).length > 0) throw new Error("An unsupported artifact cannot contain strategy source.");
+    if (artifact.clarificationQuestions.length > 0) throw new Error("An unsupported artifact cannot contain clarification questions.");
+    if (contract.unsupportedCapabilities.length === 0) throw new Error("An unsupported artifact must identify unsupported capabilities.");
   }
   for (const field of ["assumptions", "warnings"]) {
     if (!Array.isArray(artifact[field]) || !(artifact[field] as unknown[]).every((item) => typeof item === "string")) {
@@ -138,6 +154,7 @@ export function parseStrategyModelArtifact(text: string): StrategyModelArtifact 
     status: artifact.status,
     source: artifact.source as string,
     contract: parsedContract,
+    clarificationQuestions: [...artifact.clarificationQuestions as string[]],
     explanation: artifact.explanation as string,
     assumptions: [...artifact.assumptions as string[]],
     warnings: [...artifact.warnings as string[]],

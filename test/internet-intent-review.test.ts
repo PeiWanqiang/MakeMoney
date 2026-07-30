@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { sha256 } from "../src/internet-intents/pipeline.js";
 import {
   buildGoldenCorpus,
+  blindReviewQueueItem,
   createReviewDraft,
   mergeReview,
   selectReviewQueue,
@@ -134,5 +135,14 @@ describe("internet intent review", () => {
     const reviewed: InternetIntentAnnotation = mergeReview(stack, undefined, submittedReview(stack, "reviewer-1"));
     const remaining = selectReviewQueue([stack, github], [reviewed], { reviewerId: "reviewer-1", limit: 2 });
     expect(remaining.map((item) => item.candidate.id)).toEqual(["github"]);
+  });
+
+  it("removes source, author, scoring and AI-adjacent metadata from blind packets", () => {
+    const item = candidate("blind");
+    const blind = blindReviewQueueItem({ candidate: item, review: createReviewDraft(item, "reviewer-a") });
+    expect(Object.keys(blind.candidate).sort()).toEqual(["id", "language", "rawSha256", "rawText", "title"]);
+    expect(blind.candidate).not.toHaveProperty("sourceUrl");
+    expect(blind.candidate).not.toHaveProperty("author");
+    expect(blind.candidate).not.toHaveProperty("relevance");
   });
 });

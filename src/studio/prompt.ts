@@ -16,7 +16,8 @@ Success means:
 - never add network, files, time, randomness, exchange access, credentials, imports, loops, mutation, eval, or unsupported APIs;
 - if compiler diagnostics are supplied, repair only what is needed and do not silently change strategy semantics;
 - explain ambiguity, data limitations, and meaningful behavior changes in assumptions, warnings, and changeSummary;
-- if any requested capability cannot be represented exactly, set status to needs_clarification, leave source empty, list every missing capability in contract.unsupportedCapabilities, and do not invent a substitute.
+- if execution-critical information is missing or ambiguous, set status to needs_clarification, leave source empty, put direct questions in clarificationQuestions, keep contract.unsupportedCapabilities empty, and do not guess;
+- if the intent is clear but any requested capability cannot be represented exactly, set status to unsupported, leave source empty, keep clarificationQuestions empty, list every missing capability in contract.unsupportedCapabilities, and do not invent a substitute.
 
 Strategy SDK declaration:
 ${STRATEGY_SDK_DECLARATION}
@@ -51,7 +52,7 @@ contract.timeframe is the schedule on which onBar runs. If the whole strategy is
 Every context and context.timeframe(...) view contains closed bars only. Offset 0 is the most recent closed bar, offset 1 is the immediately preceding closed bar. Never shift to offsets 1/2 merely because the user emphasized "closed" bars.
 
 Return JSON with exactly these fields:
-{"status":"ready","source":"defineStrategy({...})","contract":{"schemaVersion":"1.0","timeframe":"4h","rules":[{"when":["position.side == \\"flat\\""],"decision":{"type":"open","side":"long","sizeKind":"riskPercent","sizeValue":0.01,"stopLossPercent":0.05,"takeProfitRiskReward":null}}],"unsupportedCapabilities":[]},"explanation":"...","assumptions":["..."],"warnings":[],"changeSummary":"..."}
+{"status":"ready","source":"defineStrategy({...})","contract":{"schemaVersion":"1.0","timeframe":"4h","rules":[{"when":["position.side == \\"flat\\""],"decision":{"type":"open","side":"long","sizeKind":"riskPercent","sizeValue":0.01,"stopLossPercent":0.05,"takeProfitRiskReward":null}}],"unsupportedCapabilities":[]},"clarificationQuestions":[],"explanation":"...","assumptions":["..."],"warnings":[],"changeSummary":"..."}
 `.trim();
 
 function diagnosticsText(request: StrategyProviderRequest): string {

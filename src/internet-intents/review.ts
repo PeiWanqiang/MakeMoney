@@ -49,6 +49,11 @@ export interface InternetIntentReviewQueueItem {
   review: InternetIntentReview;
 }
 
+export interface InternetIntentBlindReviewQueueItem {
+  candidate: Pick<InternetIntentCandidate, "id" | "title" | "rawText" | "rawSha256" | "language">;
+  review: InternetIntentReview;
+}
+
 export interface InternetIntentGoldenRecord {
   schemaVersion: "1.0";
   id: string;
@@ -238,6 +243,20 @@ export function createReviewDraft(candidate: InternetIntentCandidate, reviewerId
     notes: [],
     basedOnReviewIds: [],
     submittedAt: null,
+  };
+}
+
+export function blindReviewQueueItem(item: InternetIntentReviewQueueItem): InternetIntentBlindReviewQueueItem {
+  const { candidate, review } = item;
+  return {
+    candidate: {
+      id: candidate.id,
+      title: candidate.title,
+      rawText: candidate.rawText,
+      rawSha256: candidate.rawSha256,
+      language: candidate.language,
+    },
+    review,
   };
 }
 

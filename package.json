@@ -19,6 +19,7 @@
     "intents:filter": "tsx scripts/filter-internet-intents.ts",
     "intents:review": "tsx scripts/review-internet-intents.ts",
     "intents:suggest": "tsx scripts/suggest-internet-intents.ts",
+    "intents:evaluate": "tsx scripts/evaluate-internet-goldens.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

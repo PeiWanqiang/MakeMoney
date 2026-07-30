@@ -5,9 +5,10 @@ import type { SemanticVerificationReport, StrategyContract } from "../semantics/
 export type StrategyGenerationMode = "create" | "revise" | "repair";
 
 export interface StrategyModelArtifact {
-  status: "ready" | "needs_clarification";
+  status: "ready" | "needs_clarification" | "unsupported";
   source: string;
   contract: StrategyContract;
+  clarificationQuestions?: string[];
   explanation: string;
   assumptions: string[];
   warnings: string[];

@@ -27,6 +27,7 @@ describe("DeepSeek strategy provider", () => {
               status: "ready",
               source: thresholdStrategy,
               contract: { schemaVersion: "1.0", timeframe: "4h", rules: [], unsupportedCapabilities: [] },
+              clarificationQuestions: [],
               explanation: "Threshold entry and exit.",
               assumptions: ["Closed bars."],
               warnings: [],

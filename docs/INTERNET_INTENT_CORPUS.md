@@ -78,6 +78,10 @@ npm run intents:filter -- --minimum-score 0.3 --near-threshold 0.9
 # 为一名独立审核者生成25条分层队列
 npm run intents:review -- queue --reviewer reviewer-1 --limit 25
 
+# 正式审核使用隐藏来源、评分和 AI 建议的盲审包
+npm run intents:review -- queue --reviewer reviewer-a --limit 25 --blind true
+npm run intents:review -- queue --reviewer reviewer-b --limit 25 --blind true
+
 # 查看进度
 npm run intents:review -- stats
 
@@ -137,6 +141,14 @@ npm run intents:review -- submit --file review.json
 ```bash
 npm run intents:review -- export
 ```
+
+黄金集产生后，整体引擎默认只跑 development 集：
+
+```bash
+npm run intents:evaluate -- --split development --concurrency 2
+```
+
+评测同时检查第一动作、ready 契约、程序反向语义、行为场景和变异杀死率。`needs_clarification` 和 `unsupported` 的动作可以自动核对，但问题/能力描述的语义正确性会保留为人工复核，不计作严格通过。盲测集必须显式增加 `--allow-blind true`，防止日常调试意外查看冻结样本。
 
 仅用于验证工作流的单人试点必须显式降低门槛：
 

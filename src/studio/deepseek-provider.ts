@@ -108,7 +108,7 @@ export class DeepSeekStrategyProgramProvider implements StrategyProgramProvider 
             content: `${buildStrategyProviderInput(request)}\n\nReturn one valid JSON object only.${
               outputAttempt === 0
                 ? ""
-                : ` The previous response was empty or malformed. Parser error: ${lastError?.message ?? "unknown format error"}. Include every required field and no surrounding text. For close decisions side, sizeKind, sizeValue, stopLossPercent, and takeProfitRiskReward must all be null.`
+                : ` The previous response was empty or malformed. Parser error: ${lastError?.message ?? "unknown format error"}. Include every required field, including clarificationQuestions, and no surrounding text. For close decisions side, sizeKind, sizeValue, stopLossPercent, and takeProfitRiskReward must all be null.`
             }`,
           },
         ],

@@ -32,8 +32,18 @@ export class StrategyNeedsClarificationError extends Error {
   readonly response: StrategyProviderResponse;
 
   constructor(response: StrategyProviderResponse) {
-    super(`Strategy needs clarification: ${response.artifact.contract.unsupportedCapabilities.join(", ")}`);
+    super(`Strategy needs clarification: ${(response.artifact.clarificationQuestions ?? []).join(" ")}`);
     this.name = "StrategyNeedsClarificationError";
+    this.response = response;
+  }
+}
+
+export class StrategyUnsupportedError extends Error {
+  readonly response: StrategyProviderResponse;
+
+  constructor(response: StrategyProviderResponse) {
+    super(`Strategy uses unsupported capabilities: ${response.artifact.contract.unsupportedCapabilities.join(", ")}`);
+    this.name = "StrategyUnsupportedError";
     this.response = response;
   }
 }
@@ -114,6 +124,7 @@ export class StrategyStudio {
         ...(diagnostics === undefined ? {} : { compilerDiagnostics: diagnostics }),
       });
       if (response.artifact.status === "needs_clarification") throw new StrategyNeedsClarificationError(response);
+      if (response.artifact.status === "unsupported") throw new StrategyUnsupportedError(response);
       try {
         const compiled = compileStrategySource(response.artifact.source);
         const semanticVerification = await verifyStrategySemantics(response.artifact.source, response.artifact.contract);

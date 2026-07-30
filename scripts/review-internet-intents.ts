@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { readJsonLines, writeJsonLinesAtomic } from "../src/internet-intents/pipeline.js";
 import {
   buildGoldenCorpus,
+  blindReviewQueueItem,
   mergeReview,
   parseReview,
   selectReviewQueue,
@@ -68,6 +69,7 @@ if (command === "queue") {
   const source = args.get("source");
   const language = args.get("language");
   const relevance = args.get("relevance");
+  const blind = args.has("blind") ? booleanValue(args.get("blind") ?? "", "--blind") : false;
   if (source && source !== "stackexchange" && source !== "github") throw new Error("--source must be stackexchange or github.");
   if (language && !["en", "zh", "mixed", "unknown"].includes(language)) throw new Error("--language is invalid.");
   if (relevance && !["likely", "possible", "unlikely"].includes(relevance)) throw new Error("--relevance is invalid.");
@@ -81,15 +83,21 @@ if (command === "queue") {
     ...(relevance ? { relevance: relevance as InternetIntentCandidate["relevance"]["status"] } : {}),
   });
   const output = resolve(args.get("output") ?? `data/internet-intents/review/queue-${reviewerId}.json`);
+  const outputItems = blind
+    ? items.map(blindReviewQueueItem)
+    : items;
   await writeJsonAtomic(output, {
     schemaVersion: "1.0",
     generatedAt: new Date().toISOString(),
     reviewerId,
-    count: items.length,
-    instructions: "Edit each review object, set status=submitted and submittedAt, then submit one review JSON at a time.",
-    items,
+    blind,
+    count: outputItems.length,
+    instructions: blind
+      ? "Blind review: source, author, relevance scores and AI suggestions are intentionally hidden. Edit each review object, then submit one review JSON at a time."
+      : "Edit each review object, set status=submitted and submittedAt, then submit one review JSON at a time.",
+    items: outputItems,
   });
-  console.log(JSON.stringify({ command, output, count: items.length, reviewerId }, null, 2));
+  console.log(JSON.stringify({ command, output, count: outputItems.length, reviewerId, blind }, null, 2));
 } else if (command === "submit") {
   const input = args.get("file");
   if (!input) throw new Error("submit requires --file review.json.");
@@ -132,7 +140,7 @@ if (command === "queue") {
   console.log(JSON.stringify({ command, output, manifest: manifestPath, ...result.manifest.counts, corpusSha256: result.manifest.corpusSha256 }, null, 2));
 } else {
   console.log(`Usage:
-  npm run intents:review -- queue --reviewer ID [--limit 25] [--output PATH]
+  npm run intents:review -- queue --reviewer ID [--limit 25] [--blind true] [--output PATH]
   npm run intents:review -- submit --file REVIEW.json
   npm run intents:review -- stats
   npm run intents:review -- export [--minimum-reviewers 2] [--require-adjudication true]

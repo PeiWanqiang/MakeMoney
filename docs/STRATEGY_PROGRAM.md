@@ -184,7 +184,7 @@ if (losses >= 3) {
 - 目标 Runtime 版本。
 - 结构化编译错误。
 
-AI 不能根据失败结果偷偷改变策略含义。当前 SDK 无法覆盖意图时，模型必须返回 `needs_clarification` 和缺失能力，不能改成“最接近”的替代策略。任何语义修改都要在 diff 和反向解释中显示。
+AI 不能根据失败结果偷偷改变策略含义。信息缺失或歧义时必须返回 `needs_clarification` 和明确问题；意图清晰但当前 SDK 无法覆盖时必须返回 `unsupported` 和缺失能力，不能改成“最接近”的替代策略。任何语义修改都要在 diff 和反向解释中显示。
 
 ## 9. 当前代码结构
 
@@ -216,6 +216,7 @@ test/
 ## 10. 当前已实现
 
 - DeepSeek V4 Pro 默认 provider 和 OpenAI Responses API 后备 provider。
+- `ready / needs_clarification / unsupported` 三分支产品动作，追问与能力拒绝使用独立字段。
 - 自然语言生成、结构化编译诊断和最多两轮定点修复。
 - 完整 TypeScript 语义类型检查，可阻止模型虚构 SDK 方法。
 - 反向解释、假设、警告、变更摘要和源码 diff。
