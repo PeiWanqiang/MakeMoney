@@ -13,6 +13,7 @@
 - [商务与市场方案](docs/BUSINESS_PLAN.md)
 - [历史行情数据管线](docs/DATA_PIPELINE.md)
 - [当前项目状态与后续工作](docs/PROJECT_STATUS.md)
+- [互联网策略意图语料库](docs/INTERNET_INTENT_CORPUS.md)
 - [回测引擎独立交叉验证](docs/CROSS_VALIDATION.md)
 
 ## 已确定的核心原则
@@ -60,6 +61,18 @@ npm run semantics:deepseek -- --limit 100 --concurrency 6
 ```
 
 真实模型评测会记录每条样例的契约差异、修复次数、延迟、token 和估算成本，默认写入 Git 已忽略的 `data/reports/semantic-evals/`。DeepSeek V4 Pro 的全量结果由 V2 的 86/100、V3 的 94/100 提升到 V4 的 100/100；V4 中有 21 条经过自动修复，0 条契约错配、生成错误或 provider 错误。该结果只来自固定合成表达，不能替代真实用户语料、未见测试集和重复运行稳定性评测。
+
+## 互联网真实表达采集
+
+首批互联网采集使用 Stack Exchange 官方 API 和有明确许可证的 GitHub README；Reddit、TradingView 等来源在取得相应许可前不进入自动采集。采集结果包含来源、许可证、哈希、相关性评分和 checkpoint，并在跨来源过滤后去重。机器筛选结果只是候选，不自动成为黄金策略。
+
+```bash
+npm run intents:collect-stackexchange -- --pages 1 --page-size 50
+GITHUB_TOKEN="..." npm run intents:collect-github -- --pages 1 --page-size 25
+npm run intents:filter -- --minimum-score 0.3 --near-threshold 0.9
+```
+
+数据默认写入 Git 已忽略的 `data/internet-intents/`。完整来源边界、格式和验证结果见[互联网策略意图语料库](docs/INTERNET_INTENT_CORPUS.md)。
 
 ## 本地数据与回测
 
