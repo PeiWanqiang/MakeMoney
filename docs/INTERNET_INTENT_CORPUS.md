@@ -20,7 +20,7 @@
   -> 冻结评测集
 ```
 
-当前代码只完成到“去重候选集”。候选必须经过人工证据标注，才能进入真实评测集。
+当前代码已完成“去重候选集”和“可审计人工标注工具”。候选必须经过人工证据标注和裁决，才能进入真实评测集。
 
 ## 2. 当前启用的数据源
 
@@ -74,6 +74,12 @@ GITHUB_TOKEN="..." npm run intents:collect-github -- --pages 1 --page-size 25
 
 # 合并、重新评分并跨来源去重
 npm run intents:filter -- --minimum-score 0.3 --near-threshold 0.9
+
+# 为一名独立审核者生成25条分层队列
+npm run intents:review -- queue --reviewer reviewer-1 --limit 25
+
+# 查看进度
+npm run intents:review -- stats
 ```
 
 默认文件：
@@ -83,6 +89,10 @@ data/internet-intents/raw/stackexchange.jsonl
 data/internet-intents/raw/github.jsonl
 data/internet-intents/candidates/candidates.jsonl
 data/internet-intents/candidates/summary.json
+data/internet-intents/review/annotations.jsonl
+data/internet-intents/review/queue-reviewer-1.json
+data/internet-intents/golden/golden.jsonl
+data/internet-intents/golden/manifest.json
 ```
 
 整个目录被 Git 忽略。重复执行相同查询时会读取 checkpoint，不重新请求已经完成的页。
@@ -101,11 +111,43 @@ data/internet-intents/candidates/summary.json
 
 以上495条尚未人工审核，不应报告为“495条真实黄金策略”。
 
-## 7. 下一阶段
+## 7. 审核和黄金集质量门禁
+
+队列中的每条记录同时包含只读 `candidate` 和待填写 `review`。审核者需要：
+
+1. 保持 `candidateId` 和 `candidateSha256` 不变。
+2. 把 `status` 改为 `submitted`，填写 ISO 格式的 `submittedAt`。
+3. 选择 `ready`、`needs_clarification`、`unsupported` 或 `not_strategy`。
+4. 标注至少一个原文证据区间。`quote` 必须逐字符等于 `rawText.slice(start, end)`，`supports` 说明该区间支持什么事实。
+5. `ready` 必须填写规范化意图和 `StrategyContract`；缺少关键参数时标为 `needs_clarification` 并写明问题；引擎能力不足时标为 `unsupported` 并列出能力缺口。
+
+将单条 `review` 对象另存为 JSON 后提交：
+
+```bash
+npm run intents:review -- submit --file review.json
+```
+
+不同审核者使用不同 `reviewerId` 独立提交。裁决者在同样的数据结构中把 `kind` 改为 `adjudication`，并在 `basedOnReviewIds` 中列出所参考的独立审核 ID。新独立意见提交后，旧裁决会自动失效，避免裁决基于过期意见。
+
+正式黄金集默认要求至少两名不同审核者和一份裁决：
+
+```bash
+npm run intents:review -- export
+```
+
+仅用于验证工作流的单人试点必须显式降低门槛：
+
+```bash
+npm run intents:review -- export --minimum-reviewers 1 --require-adjudication false
+```
+
+导出时再次验证原文 SHA、证据区间、状态字段和契约结构。`not_strategy` 作为过滤依据保留在标注记录中，但不进入黄金策略集。开发、验证和盲测按作者分组；GitHub 内容按仓库分组，同一作者或仓库不会跨集合泄漏。导出清单记录质量门槛、各类数量和整个 JSONL 的 SHA-256。
+
+这个流程验证的是“黄金答案确实来自用户原文”，并不能仅凭一条回测收益证明翻译正确。后续评测仍需同时检查：黄金契约差异、生成代码静态语义、确定性行为场景和变异测试。
+
+## 8. 下一阶段
 
 1. 扩展到约2,000条候选，并补充有明确许可证的中文来源。
-2. 增加审核状态、证据片段、`ready / needs_clarification / unsupported` 标注。
-3. 对自然语言与附带代码做独立双路语义抽取。
-4. 人工裁决250条，形成150条黄金语料。
-5. 按作者、仓库和来源切分开发集、验证集和冻结盲测集。
-6. 使用当前 V4 评测器运行真实互联网语料，并独立报告高、中、低置信度结果。
+2. 对自然语言与附带代码做独立双路语义抽取，作为审核者参考而非黄金答案。
+3. 人工双审250条并完成争议裁决，形成约150条黄金语料。
+4. 使用当前 V4 评测器运行真实互联网语料，并独立报告高、中、低置信度结果。

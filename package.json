@@ -17,6 +17,7 @@
     "intents:collect-stackexchange": "tsx scripts/collect-stackexchange-intents.ts",
     "intents:collect-github": "tsx scripts/collect-github-intents.ts",
     "intents:filter": "tsx scripts/filter-internet-intents.ts",
+    "intents:review": "tsx scripts/review-internet-intents.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
