@@ -75,6 +75,8 @@ Turn any crypto trading idea into a strategy you can verify, simulate, and run.
 
 ## 3. 核心产品循环
 
+产品能力扩展遵循[泛化优先准入规范](GENERALIZATION_POLICY.md)：用户样例用于发现通用语义缺口和建立回归证据，不作为特殊实现分支。只有意图、契约、执行和用户解释一致，并通过变体与边界测试，产品才能展示“已支持”。
+
 ```text
 描述想法
   -> AI 澄清不可量化部分
