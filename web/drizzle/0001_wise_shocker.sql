@@ -1,0 +1,1 @@
+CREATE INDEX `strategy_submissions_session_idx` ON `strategy_submissions` (`session_id`,`created_at`);

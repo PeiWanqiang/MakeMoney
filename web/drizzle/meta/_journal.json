@@ -1,0 +1,55 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1785423995716,
+      "tag": "0000_steady_dorian_gray",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1785424188206,
+      "tag": "0001_wise_shocker",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1785456089685,
+      "tag": "0002_legal_wendell_rand",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1785498481776,
+      "tag": "0003_worthless_skreet",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1785510455295,
+      "tag": "0004_slippery_jane_foster",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1785514379391,
+      "tag": "0005_elite_genesis",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1785580242588,
+      "tag": "0006_same_firestar",
+      "breakpoints": true
+    }
+  ]
+}

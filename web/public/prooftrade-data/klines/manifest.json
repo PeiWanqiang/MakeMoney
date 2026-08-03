@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "1",
+  "generatorVersion": "local-kline-cache-v1",
+  "sources": [
+    {
+      "market": "perpetual",
+      "asset": "BTCUSDT",
+      "datasetId": "binance-usdm-btcusdt-perp-1m-2020-01-2026-06",
+      "actualStart": 1577836800000,
+      "actualEnd": 1782863999999,
+      "source": "binance-vision",
+      "emitted": {
+        "1h": 56952,
+        "4h": 14238,
+        "15m": 35040
+      }
+    },
+    {
+      "market": "spot",
+      "asset": "BTCUSDT",
+      "datasetId": "binance-spot-btcusdt-1m-2024-01-2024-12",
+      "actualStart": 1704067200000,
+      "actualEnd": 1735689599999,
+      "source": "binance-vision",
+      "emitted": {
+        "15m": 35136,
+        "1h": 8784,
+        "4h": 2196
+      }
+    }
+  ],
+  "recentSeed": {
+    "market": "perpetual",
+    "asset": "BTCUSDT",
+    "month": "2026-07",
+    "actualStart": 1782864000000,
+    "actualEnd": 1785455999999,
+    "minuteBars": 43200
+  }
+}
