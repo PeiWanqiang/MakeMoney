@@ -6,6 +6,7 @@
   "scripts": {
     "backtest:real": "tsx examples/run-real-data.ts",
     "backtest:cross-validate": "tsx scripts/cross-validate-backtest.ts",
+    "census:capability-gaps": "tsx scripts/census-capability-gaps.ts",
     "data:binance-history": "tsx scripts/download-binance-history.ts",
     "data:binance-perp-history": "tsx scripts/download-binance-perpetual-history.ts",
     "data:download": "tsx scripts/download-hyperliquid.ts",
