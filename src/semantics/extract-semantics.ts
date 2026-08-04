@@ -5,6 +5,7 @@ import type {
   ContractRule,
   ExtractedStrategySemantics,
 } from "./contract.js";
+import { canonicalNumericExpression } from "./expression.js";
 
 type Variables = Map<string, ts.Expression>;
 
@@ -140,6 +141,19 @@ function canonicalOperand(node: ts.Expression, variables: Variables): string | u
   return undefined;
 }
 
+/**
+ * Canonicalizes a numeric operand, recursing through safe arithmetic.
+ *
+ * `canonicalOperand` only ever recognised leaves, so `market.close * 1.02` — an
+ * operand shape the prompt explicitly offers the model — extracted as nothing
+ * and the whole condition was recorded as opaque, which the verify gate treats
+ * as grounds to refuse the strategy. Arithmetic is now folded in around the same
+ * leaf canonicalizer.
+ */
+function canonicalExpression(node: ts.Expression, variables: Variables): string | undefined {
+  return canonicalNumericExpression(node, variables, { resolve, leaf: canonicalOperand });
+}
+
 function operatorText(kind: ts.SyntaxKind): string | undefined {
   const operators = new Map<ts.SyntaxKind, string>([
     [ts.SyntaxKind.EqualsEqualsEqualsToken, "=="],
@@ -160,7 +174,7 @@ function canonicalCondition(node: ts.Expression, variables: Variables): string |
     const path = memberPath(resolved.expression);
     const call = path?.at(-1);
     if (call === "crossedAbove" || call === "crossedBelow") {
-      const args = resolved.arguments.map((argument) => canonicalOperand(argument, variables));
+      const args = resolved.arguments.map((argument) => canonicalExpression(argument, variables));
       if (args.length === 4 && args.every((argument) => argument !== undefined)) {
         return `${call === "crossedAbove" ? "crossAbove" : "crossBelow"}(${args.join(",")})`;
       }
@@ -168,8 +182,8 @@ function canonicalCondition(node: ts.Expression, variables: Variables): string |
   }
   if (ts.isBinaryExpression(resolved)) {
     const operator = operatorText(resolved.operatorToken.kind);
-    const left = canonicalOperand(resolved.left, variables);
-    const right = canonicalOperand(resolved.right, variables);
+    const left = canonicalExpression(resolved.left, variables);
+    const right = canonicalExpression(resolved.right, variables);
     if (operator && left !== undefined && right !== undefined) return `${left} ${operator} ${right}`;
   }
   return undefined;

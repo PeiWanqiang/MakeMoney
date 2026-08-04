@@ -9,6 +9,13 @@ import {
   type SemanticScenarioResult,
   type StrategyContract,
 } from "./contract.js";
+import {
+  evaluateNumericExpression,
+  expressionOperands,
+  isCompositeExpression,
+  isIndicatorOperand,
+  type ExpressionEnvironment,
+} from "./expression.js";
 
 function splitTopLevel(value: string): string[] {
   const parts: string[] = [];
@@ -31,7 +38,110 @@ function splitTopLevel(value: string): string[] {
 }
 
 function isIndicator(value: string): boolean {
-  return /^(sma|ema|highest|lowest|percentChange|standardDeviation|rsi|atr|macd|bollingerBands)\(/.test(value);
+  return isIndicatorOperand(value);
+}
+
+/**
+ * Reads back the values a scenario currently assigns, so an expression can be
+ * evaluated against exactly what the sandbox will see.
+ *
+ * Composite indicators are stored as one object per call (`macd(...)` holding
+ * `signal`), while the canonical operand names the member (`macd(...).signal`),
+ * so those are flattened back into member-qualified keys.
+ */
+function scenarioEnvironment(scenario: StrategySemanticScenario): ExpressionEnvironment {
+  const indicators: Record<string, number | undefined> = {};
+  for (const [key, value] of Object.entries(scenario.indicators ?? {})) {
+    if (typeof value === "number") indicators[key] = value;
+    else if (value && typeof value === "object" && !Array.isArray(value)) {
+      for (const [member, nested] of Object.entries(value)) {
+        if (typeof nested === "number") indicators[`${key}.${member}`] = nested;
+      }
+    }
+  }
+  const numeric = (source: Record<string, unknown> | undefined): Record<string, number | undefined> => {
+    const output: Record<string, number | undefined> = {};
+    for (const [key, value] of Object.entries(source ?? {})) if (typeof value === "number") output[key] = value;
+    return output;
+  };
+  return {
+    indicators,
+    market: numeric(scenario.market as Record<string, unknown> | undefined),
+    account: { equity: scenario.equity },
+    state: numeric(scenario.state as Record<string, unknown> | undefined),
+  };
+}
+
+/** True when `setOperand` can actually write this operand. */
+function isSettableOperand(operand: string): boolean {
+  if (isIndicator(operand)) return true;
+  const [section, field] = operand.split(".");
+  if (section === "market" && field) return true;
+  if (section === "account" && field === "equity") return true;
+  return section === "state" && Boolean(field);
+}
+
+function holds(left: number, operator: string, right: number): boolean {
+  if (operator === ">") return left > right;
+  if (operator === ">=") return left >= right;
+  if (operator === "<") return left < right;
+  if (operator === "<=") return left <= right;
+  if (operator === "==") return left === right;
+  return left !== right;
+}
+
+/**
+ * Candidate values tried when solving a composite side of a comparison.
+ *
+ * The supported arithmetic is built from + - * / over a handful of operands, so
+ * each side is monotone in any single operand across a sign-consistent range.
+ * Sweeping magnitudes and both signs is therefore enough to land on either side
+ * of the threshold without needing to invert the expression algebraically.
+ */
+const SOLVER_LADDER = [1, 2, 0.5, 5, 0.1, 10, 0.01, 50, 100, 0.001, 500, 1_000, 10_000, 0, -1, -10, -100, -1_000];
+
+/**
+ * Satisfies or violates a comparison where at least one side computes a value
+ * rather than naming one.
+ *
+ * The leaf-versus-leaf path can set both sides directly; here one side is an
+ * expression, so a single operand it reads is swept until the whole comparison
+ * lands on the wanted truth value. Operands shared by both sides are skipped:
+ * moving one changes both sides at once, which is how a condition like
+ * `market.close > market.close * 1.02` turns out to be unsatisfiable rather than
+ * merely hard to solve.
+ */
+function applyCompositeComparison(
+  scenario: StrategySemanticScenario,
+  left: string,
+  operator: string,
+  right: string,
+  satisfied: boolean,
+): boolean {
+  const leftOperands = expressionOperands(left);
+  const rightOperands = expressionOperands(right);
+  const shared = new Set(leftOperands.filter((operand) => rightOperands.includes(operand)));
+  const candidates = [...leftOperands, ...rightOperands]
+    .filter((operand) => !shared.has(operand) && isSettableOperand(operand));
+
+  const matches = (): boolean => {
+    const environment = scenarioEnvironment(scenario);
+    const leftValue = evaluateNumericExpression(left, environment);
+    const rightValue = evaluateNumericExpression(right, environment);
+    if (leftValue === undefined || rightValue === undefined) return false;
+    return holds(leftValue, operator, rightValue) === satisfied;
+  };
+
+  if (matches()) return true;
+  for (const operand of candidates) {
+    const original = evaluateNumericExpression(operand, scenarioEnvironment(scenario));
+    for (const value of SOLVER_LADDER) {
+      setOperand(scenario, operand, value);
+      if (matches()) return true;
+    }
+    if (original !== undefined) setOperand(scenario, operand, original);
+  }
+  return false;
 }
 
 function compactOperand(value: string): string {
@@ -139,11 +249,16 @@ function applyCondition(scenario: StrategySemanticScenario, condition: string, s
   const operator = comparison[2] ?? "";
   const right = comparison[3]?.trim() ?? "";
   const literal = parsedLiteral(right);
+  if (typeof literal === "string") {
+    setOperand(scenario, left, satisfied === (operator === "==") ? literal : literal === "flat" ? "long" : "flat");
+    return true;
+  }
+  // A side that computes a value cannot be assigned one, so it is solved for
+  // instead. Conditions naming a value on both sides keep the direct path below.
+  if (isCompositeExpression(left) || isCompositeExpression(right)) {
+    return applyCompositeComparison(scenario, left, operator, right, satisfied);
+  }
   if (literal !== undefined) {
-    if (typeof literal === "string") {
-      setOperand(scenario, left, satisfied === (operator === "==") ? literal : literal === "flat" ? "long" : "flat");
-      return true;
-    }
     const delta = Math.max(1, Math.abs(literal) * 0.1);
     const candidate = operator === ">" || operator === ">="
       ? satisfied ? literal + delta : literal - delta
