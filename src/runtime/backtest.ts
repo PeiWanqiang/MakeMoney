@@ -81,6 +81,8 @@ function positionQuantity(decision: OpenDecision, fillPrice: number, equity: num
   let requestedNotional: number;
   if (decision.size.kind === "fixedNotional") {
     requestedNotional = decision.size.value;
+  } else if (decision.size.kind === "equityPercent") {
+    requestedNotional = equity * decision.size.value;
   } else {
     const riskCapital = equity * decision.size.value;
     requestedNotional = riskCapital / decision.stopLossPercent;

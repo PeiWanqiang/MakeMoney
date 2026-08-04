@@ -511,6 +511,7 @@ export const zh = {
     ADOPT_FAILED: "新策略版本没有创建成功",
     RANGE_TOO_LARGE: (timeframe: string, maxBars: string) => `${timeframe} 周期最多回测 ${maxBars} 根 K 线，请缩短日期范围`,
     OHLCV_ONLY: "当前网页回测数据只包含 OHLCV；资金费率和持仓量策略请使用完整本地引擎",
+    STRATEGY_VERIFY_FAILED: "生成的程序与策略理解不一致，请调整描述后重试",
     unknown: "发生了未知错误，请稍后重试",
   },
 

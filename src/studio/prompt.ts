@@ -28,6 +28,8 @@ Store a nullable indicator result in a local variable, check that variable for n
 The audit contract is not executable. It must list every open/close rule using canonical condition strings:
 - position.side == "flat"
 - market.fundingRate < 0
+- market.quoteVolume > 1000000 (quote-currency turnover; null when the source does not provide it)
+- market.takerBuyBaseVolume > market.volume (taker-buy base volume; both fields are null when unavailable)
 - ema("close",20,0) > ema("close",50,0)
 - rsi("close",14,0) < 30
 - atr(14,0) > 100

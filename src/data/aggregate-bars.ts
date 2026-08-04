@@ -51,6 +51,15 @@ export function aggregateOneMinuteBars(source: MarketBar[], interval: AggregateI
       fundingRate: bucket.reduce((sum, bar) => sum + (bar.fundingRate ?? 0), 0),
       ...(last.markPrice === undefined ? {} : { markPrice: last.markPrice }),
       ...(last.openInterest === undefined ? {} : { openInterest: last.openInterest }),
+      // Turnover/taker volumes sum like base volume. The last bar gates because
+      // every bar in a bucket comes from the same source, matching markPrice.
+      ...(last.quoteVolume === undefined ? {} : { quoteVolume: bucket.reduce((sum, bar) => sum + (bar.quoteVolume ?? 0), 0) }),
+      ...(last.takerBuyBaseVolume === undefined
+        ? {}
+        : { takerBuyBaseVolume: bucket.reduce((sum, bar) => sum + (bar.takerBuyBaseVolume ?? 0), 0) }),
+      ...(last.takerBuyQuoteVolume === undefined
+        ? {}
+        : { takerBuyQuoteVolume: bucket.reduce((sum, bar) => sum + (bar.takerBuyQuoteVolume ?? 0), 0) }),
     };
     bars.push(aggregated);
   }

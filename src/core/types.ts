@@ -8,6 +8,12 @@ export interface MarketBar {
   markPrice?: number;
   fundingRate?: number;
   openInterest?: number;
+  /** Quote-currency turnover (Binance kline column 7). Absent when the source does not provide it. */
+  quoteVolume?: number;
+  /** Taker-buy base volume (Binance kline column 9). Absent when the source does not provide it. */
+  takerBuyBaseVolume?: number;
+  /** Taker-buy quote volume (Binance kline column 10). Absent when the source does not provide it. */
+  takerBuyQuoteVolume?: number;
 }
 
 export type PositionSide = "flat" | "long" | "short";
@@ -35,6 +41,7 @@ export interface OpenDecision {
   side: "long" | "short";
   size:
     | { kind: "riskPercent"; value: number }
+    | { kind: "equityPercent"; value: number }
     | { kind: "fixedNotional"; value: number };
   stopLossPercent: number;
   takeProfitRiskReward?: number;

@@ -513,6 +513,7 @@ export const en: Messages = {
     ADOPT_FAILED: "The new strategy version was not created",
     RANGE_TOO_LARGE: (timeframe: string, maxBars: string) => `A ${timeframe} backtest covers at most ${maxBars} bars. Please shorten the date range.`,
     OHLCV_ONLY: "Web backtests only carry OHLCV. Funding rate and open interest strategies need the full local engine.",
+    STRATEGY_VERIFY_FAILED: "The generated program does not match the understood strategy. Please adjust and try again.",
     unknown: "Something went wrong. Please retry.",
   },
 

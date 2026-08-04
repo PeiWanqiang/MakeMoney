@@ -6,6 +6,16 @@ export const STRATEGY_SDK_DECLARATION = `
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
+type MarketField =
+  | "open"
+  | "high"
+  | "low"
+  | "close"
+  | "volume"
+  | "quoteVolume"
+  | "takerBuyBaseVolume"
+  | "takerBuyQuoteVolume";
+
 type StrategyDecision =
   | { type: "hold"; reason?: string }
   | {
@@ -13,6 +23,7 @@ type StrategyDecision =
       side: "long" | "short";
       size:
         | { kind: "riskPercent"; value: number }
+        | { kind: "equityPercent"; value: number }
         | { kind: "fixedNotional"; value: number };
       stopLossPercent: number;
       takeProfitRiskReward?: number;
@@ -31,6 +42,9 @@ interface StrategyContext {
     readonly markPrice: number;
     readonly fundingRate: number;
     readonly openInterest: number | null;
+    readonly quoteVolume: number | null;
+    readonly takerBuyBaseVolume: number | null;
+    readonly takerBuyQuoteVolume: number | null;
   };
   readonly account: { readonly equity: number };
   readonly position: {
@@ -40,22 +54,23 @@ interface StrategyContext {
     readonly unrealizedPnl: number;
   };
   readonly indicators: {
-    sma(field: "open" | "high" | "low" | "close" | "volume", period: number, offset?: number): number | null;
-    ema(field: "open" | "high" | "low" | "close" | "volume", period: number, offset?: number): number | null;
-    highest(field: "open" | "high" | "low" | "close" | "volume", period: number, offset?: number): number | null;
-    lowest(field: "open" | "high" | "low" | "close" | "volume", period: number, offset?: number): number | null;
-    percentChange(field: "close" | "openInterest", periods: number): number | null;
-    standardDeviation(field: "open" | "high" | "low" | "close" | "volume", period: number, offset?: number): number | null;
+    sma(field: MarketField, period: number, offset?: number): number | null;
+    ema(field: MarketField, period: number, offset?: number): number | null;
+    highest(field: MarketField, period: number, offset?: number): number | null;
+    lowest(field: MarketField, period: number, offset?: number): number | null;
+    percentChange(field: "close" | "openInterest" | MarketField, periods: number): number | null;
+    standardDeviation(field: MarketField, period: number, offset?: number): number | null;
     rsi(field: "close", period: number, offset?: number): number | null;
     atr(period: number, offset?: number): number | null;
     macd(field: "close", fastPeriod?: number, slowPeriod?: number, signalPeriod?: number, offset?: number): { macd: number; signal: number; histogram: number } | null;
-    bollingerBands(field: "open" | "high" | "low" | "close" | "volume", period: number, standardDeviations?: number, offset?: number): { middle: number; upper: number; lower: number } | null;
+    bollingerBands(field: MarketField, period: number, standardDeviations?: number, offset?: number): { middle: number; upper: number; lower: number } | null;
   };
   readonly history: {
-    values(field: "open" | "high" | "low" | "close" | "volume" | "markPrice" | "fundingRate" | "openInterest", period: number, offset?: number): readonly number[] | null;
+    values(field: MarketField | "markPrice" | "fundingRate" | "openInterest", period: number, offset?: number): readonly number[] | null;
     bars(period: number, offset?: number): readonly {
       timestamp: number; open: number; high: number; low: number; close: number; volume: number;
       markPrice: number; fundingRate: number; openInterest: number | null;
+      quoteVolume: number | null; takerBuyBaseVolume: number | null; takerBuyQuoteVolume: number | null;
     }[] | null;
   };
   timeframe(interval: "1m" | "15m" | "1h" | "4h"): Pick<StrategyContext, "market" | "indicators" | "history"> | null;

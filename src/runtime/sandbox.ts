@@ -59,8 +59,8 @@ function assertDecision(value: unknown): asserts value is StrategyDecision {
   if (decision.side !== "long" && decision.side !== "short") throw new Error("Open decision side must be 'long' or 'short'.");
   if (!decision.size || typeof decision.size !== "object") throw new Error("Open decision requires a size object.");
   const size = decision.size as Record<string, unknown>;
-  if (size.kind !== "riskPercent" && size.kind !== "fixedNotional") {
-    throw new Error("Size kind must be riskPercent or fixedNotional.");
+  if (size.kind !== "riskPercent" && size.kind !== "equityPercent" && size.kind !== "fixedNotional") {
+    throw new Error("Size kind must be riskPercent, equityPercent or fixedNotional.");
   }
   assertFiniteNumber(size.value, "size.value");
   if (size.value <= 0) throw new Error("size.value must be greater than zero.");
@@ -349,7 +349,10 @@ function __historyBars(period, offset = 0) {
     volume: bar.volume,
     markPrice: bar.markPrice ?? bar.close,
     fundingRate: bar.fundingRate ?? 0,
-    openInterest: bar.openInterest ?? null
+    openInterest: bar.openInterest ?? null,
+    quoteVolume: bar.quoteVolume ?? null,
+    takerBuyBaseVolume: bar.takerBuyBaseVolume ?? null,
+    takerBuyQuoteVolume: bar.takerBuyQuoteVolume ?? null
   }));
 }
 
@@ -368,7 +371,10 @@ function __dataView(key) {
       volume: latest.volume,
       markPrice: latest.markPrice ?? latest.close,
       fundingRate: latest.fundingRate ?? 0,
-      openInterest: latest.openInterest ?? null
+      openInterest: latest.openInterest ?? null,
+      quoteVolume: latest.quoteVolume ?? null,
+      takerBuyBaseVolume: latest.takerBuyBaseVolume ?? null,
+      takerBuyQuoteVolume: latest.takerBuyQuoteVolume ?? null
     }),
     indicators: Object.freeze({
       sma: (...args) => call(__sma, args),
@@ -405,7 +411,10 @@ function __invoke(inputJson) {
       volume: __bar.volume,
       markPrice: __bar.markPrice ?? __bar.close,
       fundingRate: __bar.fundingRate ?? 0,
-      openInterest: __bar.openInterest ?? null
+      openInterest: __bar.openInterest ?? null,
+      quoteVolume: __bar.quoteVolume ?? null,
+      takerBuyBaseVolume: __bar.takerBuyBaseVolume ?? null,
+      takerBuyQuoteVolume: __bar.takerBuyQuoteVolume ?? null
     }),
     account: Object.freeze({ equity: __input.equity }),
     position: Object.freeze(__input.position),
@@ -452,7 +461,10 @@ function __invokeSemantic(inputJson) {
     volume: input.market?.volume ?? 1000,
     markPrice: input.market?.markPrice ?? input.market?.close ?? 100,
     fundingRate: input.market?.fundingRate ?? 0,
-    openInterest: input.market?.openInterest ?? 1000000
+    openInterest: input.market?.openInterest ?? 1000000,
+    quoteVolume: input.market?.quoteVolume ?? null,
+    takerBuyBaseVolume: input.market?.takerBuyBaseVolume ?? null,
+    takerBuyQuoteVolume: input.market?.takerBuyQuoteVolume ?? null
   });
   const position = Object.freeze({
     side: input.position?.side ?? "flat",
@@ -491,7 +503,9 @@ function __invokeSemantic(inputJson) {
         timestamp: frameMarket.timestamp ?? 0, open: frameMarket.open ?? 100, high: frameMarket.high ?? 101,
         low: frameMarket.low ?? 99, close: frameMarket.close ?? 100, volume: frameMarket.volume ?? 1000,
         markPrice: frameMarket.markPrice ?? frameMarket.close ?? 100, fundingRate: frameMarket.fundingRate ?? 0,
-        openInterest: frameMarket.openInterest ?? 1000000
+        openInterest: frameMarket.openInterest ?? 1000000,
+        quoteVolume: frameMarket.quoteVolume ?? null, takerBuyBaseVolume: frameMarket.takerBuyBaseVolume ?? null,
+        takerBuyQuoteVolume: frameMarket.takerBuyQuoteVolume ?? null
       }),
       indicators: indicatorSet(frame.indicators),
       history: Object.freeze({ values: () => null, bars: () => null })

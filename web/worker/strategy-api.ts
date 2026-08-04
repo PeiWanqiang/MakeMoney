@@ -8,6 +8,14 @@ interface StrategyEnv {
   DEEPSEEK_API_KEY?: string;
   DEEPSEEK_BASE_URL?: string;
   DEEPSEEK_STRATEGY_MODEL?: string;
+  /**
+   * When set, `ready` artifacts must pass the service's program↔contract verify
+   * gate (`POST /v1/strategy/verify`) before they are persisted as runnable.
+   * Strategies that need data the Web pipeline cannot provide (funding/OI/etc.)
+   * are downgraded to `unsupported` at analyze time instead of failing the
+   * backtest with OHLCV_ONLY later.
+   */
+  BACKTEST_SERVICE_URL?: string;
 }
 
 /**
@@ -163,6 +171,86 @@ function validateArtifact(value: Record<string, unknown>): void {
   if (value.status === "unsupported" && (value.unsupportedCapabilities as unknown[]).length === 0) throw new Error("模型没有说明能力缺口");
 }
 
+/**
+ * Capabilities the Web kline pipeline can actually feed the engine. Anything a
+ * program needs beyond this (funding rate, open interest, mark price, turnover)
+ * is intercepted at analyze time. Mirrors the service's default but stays
+ * explicit here so the Web owns its data limitations.
+ */
+const VERIFY_AVAILABLE_CAPABILITIES = ["ohlcv", "indicators", "multiTimeframe", "state", "arithmetic"];
+
+const CAPABILITY_LABELS: Record<string, { zh: string; en: string }> = {
+  fundingRate: { zh: "资金费率数据", en: "funding rate data" },
+  openInterest: { zh: "持仓量数据", en: "open interest data" },
+  markPrice: { zh: "标记价格数据", en: "mark price data" },
+  turnover: { zh: "成交额与主动买卖量数据", en: "quote/taker turnover data" },
+};
+
+function capabilityLabel(capability: string, outputLanguage: "zh-CN" | "en"): string {
+  const entry = CAPABILITY_LABELS[capability];
+  return entry ? (outputLanguage === "zh-CN" ? entry.zh : entry.en) : capability;
+}
+
+type VerifyCheck = { id: string; label: string; status: "passed" | "failed" | "not_applicable"; detail: string };
+
+type VerifyGateResult =
+  | { outcome: "passed"; check: VerifyCheck }
+  | { outcome: "unsupported"; unsupported: string[]; check: VerifyCheck }
+  | { outcome: "failed"; check: VerifyCheck }
+  | { outcome: "unavailable"; check: VerifyCheck };
+
+const verifyLabel = (outputLanguage: "zh-CN" | "en") =>
+  outputLanguage === "zh-CN" ? "程序与契约一致性" : "Program and contract consistency";
+
+/**
+ * Runs the service verify gate for a `ready` artifact. Returns null when the
+ * service is not configured; returns `unavailable` when the service cannot be
+ * reached, so analyze still works during an outage (basic checks fall back).
+ */
+async function verifyArtifact(
+  env: StrategyEnv,
+  artifact: Record<string, unknown>,
+  outputLanguage: "zh-CN" | "en",
+): Promise<VerifyGateResult | null> {
+  if (!env.BACKTEST_SERVICE_URL) return null;
+  const source = typeof artifact.source === "string" ? artifact.source : "";
+  const contract = artifact.contract as Record<string, unknown> | null;
+  if (!source || !contract) return { outcome: "failed", check: { id: "verify", label: verifyLabel(outputLanguage), status: "failed", detail: outputLanguage === "zh-CN" ? "策略程序缺失" : "Strategy program missing" } };
+  const baseUrl = env.BACKTEST_SERVICE_URL.replace(/\/+$/, "");
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/v1/strategy/verify`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        schemaVersion: "verify-1.0",
+        source,
+        contract: { ...contract, unsupportedCapabilities: Array.isArray(contract.unsupportedCapabilities) ? contract.unsupportedCapabilities : [] },
+        availableCapabilities: VERIFY_AVAILABLE_CAPABILITIES,
+      }),
+    });
+  } catch {
+    return { outcome: "unavailable", check: { id: "verify", label: verifyLabel(outputLanguage), status: "not_applicable", detail: outputLanguage === "zh-CN" ? "一致性服务暂不可用，已使用基础检查" : "Consistency service unavailable; basic checks used" } };
+  }
+  if (!response.ok) {
+    return { outcome: "unavailable", check: { id: "verify", label: verifyLabel(outputLanguage), status: "not_applicable", detail: outputLanguage === "zh-CN" ? "一致性服务暂不可用，已使用基础检查" : "Consistency service unavailable; basic checks used" } };
+  }
+  const payload = await response.json() as { ok?: boolean; capabilities?: { unsupported?: string[] }; diagnostics?: Array<{ code?: string }> };
+  const unsupported = payload.capabilities?.unsupported ?? [];
+  if (unsupported.length > 0) {
+    const labels = unsupported.map((capability) => capabilityLabel(capability, outputLanguage));
+    return {
+      outcome: "unsupported",
+      unsupported,
+      check: { id: "verify", label: verifyLabel(outputLanguage), status: "failed", detail: outputLanguage === "zh-CN" ? `缺少数据能力：${labels.join("、")}` : `Missing data: ${labels.join(", ")}` },
+    };
+  }
+  if (payload.ok === true) {
+    return { outcome: "passed", check: { id: "verify", label: verifyLabel(outputLanguage), status: "passed", detail: outputLanguage === "zh-CN" ? "程序编译通过，契约核对与行为场景一致" : "Program compiles; contract matches with behavioral scenarios" } };
+  }
+  return { outcome: "failed", check: { id: "verify", label: verifyLabel(outputLanguage), status: "failed", detail: outputLanguage === "zh-CN" ? "程序与契约核对不一致" : "Program and contract are inconsistent" } };
+}
+
 function structuralChecks(artifact: Record<string, unknown>) {
   const source = typeof artifact.source === "string" ? artifact.source : "";
   const forbidden = ["fetch(", "XMLHttpRequest", "eval(", "new Function", "process.", "require(", "import ", "WebSocket"];
@@ -260,6 +348,33 @@ async function analyze(request: Request, env: StrategyEnv, identity: Identity): 
         prompt_version = excluded.prompt_version, result_json = excluded.result_json`)
       .bind(cacheKey, now, now, model, STRATEGY_CACHE_VERSION, JSON.stringify(artifact)).run();
   }
+  // Semantic admission gate: a `ready` artifact must pass the service's
+  // program↔contract verification before it is persisted as runnable, so the
+  // contract the customer confirms and the program that actually executes can
+  // never drift apart. Only the substring structural checks fall back (service
+  // unconfigured or unreachable).
+  let verifyOutcome: VerifyGateResult | null = null;
+  if (artifact.status === "ready") {
+    verifyOutcome = await verifyArtifact(env, artifact, outputLanguage);
+    if (verifyOutcome?.outcome === "failed") {
+      return fail("STRATEGY_VERIFY_FAILED", 422);
+    }
+    if (verifyOutcome?.outcome === "unsupported") {
+      const labels = verifyOutcome.unsupported.map((capability) => capabilityLabel(capability, outputLanguage));
+      const existing = Array.isArray(artifact.unsupportedCapabilities)
+        ? (artifact.unsupportedCapabilities as string[])
+        : [];
+      artifact = {
+        ...artifact,
+        status: "unsupported",
+        unsupportedCapabilities: [...new Set([...existing, ...labels])],
+      };
+    }
+  }
+  const intentCheck: VerifyCheck = { id: "intent", label: "意图结构化", status: "passed", detail: "处理动作与解释字段完整" };
+  const checks = verifyOutcome && verifyOutcome.outcome !== "unavailable"
+    ? [intentCheck, verifyOutcome.check]
+    : structuralChecks(artifact);
   const id = crypto.randomUUID();
   const latencyMs = Date.now() - started;
   const result = {
@@ -274,7 +389,7 @@ async function analyze(request: Request, env: StrategyEnv, identity: Identity): 
     warnings: artifact.warnings,
     contract: artifact.contract,
     source: artifact.source,
-    checks: structuralChecks(artifact),
+    checks,
     generation: { model, latencyMs, responseId, cacheStatus },
   };
   await env.DB.prepare(`INSERT INTO strategy_submissions

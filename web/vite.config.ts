@@ -31,6 +31,13 @@ const localBindingConfig = {
         },
       ]
     : [],
+  // The backtest service runs locally next to the dev worker. Setting the URL
+  // here routes /api/backtest/run through the QuickJS engine; leaving it unset
+  // keeps the legacy contract interpreter (the feature-flag switch).
+  vars: {
+    BACKTEST_SERVICE_URL: process.env.BACKTEST_SERVICE_URL ?? "http://127.0.0.1:8780",
+    BACKTEST_SHADOW_MODE: process.env.BACKTEST_SHADOW_MODE ?? "true",
+  },
 };
 
 export default defineConfig(async () => {

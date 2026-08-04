@@ -106,7 +106,27 @@ export function parseBinanceKline(line: string): NormalizedMarketBar | undefined
   const close = finite(columns[4], "close");
   const volume = finite(columns[5], "volume");
   const trades = Math.trunc(finite(columns[8], "trades"));
-  return { timestamp, endTimestamp: timestamp + ONE_MINUTE_MS - 1, open, high, low, close, volume, trades, fundingRate: 0, fundingPremium: 0 };
+  // Binance klines are 12 columns; the archive files carry quote turnover and
+  // taker-buy volumes that earlier parsers dropped. Every Binance archive has
+  // them, so they parse as required fields here.
+  const quoteVolume = finite(columns[7], "quoteVolume");
+  const takerBuyBaseVolume = finite(columns[9], "takerBuyBaseVolume");
+  const takerBuyQuoteVolume = finite(columns[10], "takerBuyQuoteVolume");
+  return {
+    timestamp,
+    endTimestamp: timestamp + ONE_MINUTE_MS - 1,
+    open,
+    high,
+    low,
+    close,
+    volume,
+    quoteVolume,
+    takerBuyBaseVolume,
+    takerBuyQuoteVolume,
+    trades,
+    fundingRate: 0,
+    fundingPremium: 0,
+  };
 }
 
 export function parseKrakenKline(line: string): NormalizedMarketBar | undefined {

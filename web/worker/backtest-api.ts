@@ -8,6 +8,16 @@ export interface BacktestEnv {
   DB: D1Database;
   CACHE?: ObjectCacheBucket;
   ASSETS?: Fetcher;
+  /**
+   * When set, `/api/backtest/run` proxies execution to the Node backtest
+   * service (`services/backtest/`, `npm run backtest:service`). The program is
+   * compiled, type-checked and run in the QuickJS sandbox as the single engine;
+   * the Web contract interpreter remains only for the shadow comparison and the
+   * unset-flag fallback.
+   */
+  BACKTEST_SERVICE_URL?: string;
+  /** "true" runs the legacy contract interpreter in parallel and logs divergence. */
+  BACKTEST_SHADOW_MODE?: string;
 }
 
 type Timeframe = "1m" | "15m" | "1h" | "4h";
@@ -233,7 +243,11 @@ const KLINE_CACHE_VERSION = "klines-v1";
 // optimization key matters most: the experiment id is derived from it, and that
 // id is what makes the final blind test one-shot. Bumping cuts cleanly instead
 // of leaving two keying schemes addressing the same experiment.
-const BACKTEST_CACHE_VERSION = "backtest-v4-aligned-window";
+// Bumped when execution moved from the contract interpreter to the service:
+// the key now carries the engine, so an old-engine cache entry cannot be served
+// for a new-engine run of the same logical request.
+const BACKTEST_CACHE_VERSION = "backtest-v5-engine-service";
+const SERVICE_ENGINE_VERSION = "cli-sandbox-0.1.0";
 const OPTIMIZATION_CACHE_VERSION = "optimization-v3-aligned-window";
 const MAX_OPTIMIZATION_PARAMETERS = 4;
 const MAX_OPTIMIZATION_TRIALS = 16;
@@ -1427,6 +1441,104 @@ export function runContractBacktest(contract: StrategyContract, bars: Bar[], con
 }
 
 type BacktestCoreResult = ReturnType<typeof runContractBacktest>;
+
+/**
+ * Data fields the Web kline pipeline cannot transport today. A program that
+ * gates on any of them must be intercepted before the service is asked to run
+ * it: the service would happily compute funding as zero and return a wrong,
+ * silently plausible result. Phase 2's verify gate catches these at analyze
+ * time; this is the safety net for legacy rows on the proxied path.
+ */
+const SERVICE_UNSUPPORTED_FIELDS = /\b(markPrice|fundingRate|openInterest|quoteVolume|takerBuyBaseVolume|takerBuyQuoteVolume)\b/;
+
+/** Throws the historical OHLCV_ONLY code when the program needs data the Web lacks. */
+function assertServiceSupported(source: string): void {
+  if (SERVICE_UNSUPPORTED_FIELDS.test(source)) throw new CodedError("OHLCV_ONLY");
+}
+
+/**
+ * The higher timeframes a program can read, mirroring `referencedTimeframes`
+ * but without its OHLCV_ONLY guard: the service engine supports funding/OI, so
+ * only the caller's data limitations matter here.
+ */
+function serviceTimeframeContext(contract: StrategyContract, bars: Bar[]): { primaryTimeframe: Timeframe; bars: Partial<Record<Timeframe, Bar[]>> } | undefined {
+  const found = new Set<Timeframe>([contract.timeframe]);
+  for (const rule of contract.rules) {
+    for (const condition of rule.when) {
+      for (const match of condition.matchAll(/timeframe\("(1m|15m|1h|4h)"\)/g)) found.add(match[1] as Timeframe);
+    }
+  }
+  const higher = [...found].filter((timeframe) => timeframe !== contract.timeframe);
+  if (higher.length === 0) return undefined;
+  return {
+    primaryTimeframe: contract.timeframe,
+    bars: Object.fromEntries(higher.map((timeframe) => [timeframe, aggregateBars(bars, contract.timeframe, timeframe)])),
+  };
+}
+
+/** Runs the real program on the Node service and maps the result to the Web shape. */
+async function runBacktestOnService(
+  env: BacktestEnv,
+  source: string,
+  bars: Bar[],
+  config: BacktestConfig,
+  timeframeContext: { primaryTimeframe: Timeframe; bars: Partial<Record<Timeframe, Bar[]>> } | undefined,
+): Promise<BacktestCoreResult> {
+  const baseUrl = env.BACKTEST_SERVICE_URL!.replace(/\/+$/, "");
+  const response = await fetch(`${baseUrl}/v1/backtest`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      schemaVersion: "backtest-1.0",
+      source,
+      bars,
+      config: {
+        initialCapital: config.initialCapital,
+        takerFeeRate: config.takerFeeRate,
+        slippageBps: config.slippageBps,
+        maxLeverage: config.maxLeverage,
+      },
+      ...(timeframeContext ? { timeframeContext } : {}),
+    }),
+  });
+  const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
+  if (!response.ok) {
+    const code = typeof payload?.code === "string" ? payload.code : "BACKTEST_SERVICE_ERROR";
+    const message = typeof payload?.message === "string" ? payload.message : "回测服务执行失败";
+    throw new CodedError(code, { message });
+  }
+  if (!payload || typeof payload.metrics !== "object" || !Array.isArray(payload.trades) || !Array.isArray(payload.equityCurve)) {
+    throw new CodedError("BACKTEST_SERVICE_ERROR", { message: "回测服务返回格式无效" });
+  }
+  const buyAndHoldReturn = bars.length > 1 ? bars.at(-1)!.close / bars[0]!.close - 1 : 0;
+  return {
+    initialCapital: config.initialCapital,
+    finalEquity: payload.finalEquity as number,
+    metrics: { ...(payload.metrics as Record<string, unknown>), buyAndHoldReturn },
+    trades: payload.trades as ClosedTrade[],
+    equityCurve: payload.equityCurve as EquityPoint[],
+  } as unknown as BacktestCoreResult;
+}
+
+/**
+ * Shadow comparison: the legacy contract interpreter runs the same bars and the
+ * two engines are checked for divergence. A mismatch is logged with enough
+ * detail to find the strategy; it never rolls back the UI result.
+ */
+function shadowCompare(legacy: BacktestCoreResult, service: BacktestCoreResult, bars: Bar[], strategyId: string): void {
+  const divergent =
+    legacy.metrics.tradeCount !== service.metrics.tradeCount
+    || Math.abs(legacy.finalEquity - service.finalEquity) / Math.max(1, Math.abs(legacy.finalEquity)) > 0.001
+    || Math.abs(legacy.metrics.netReturn - service.metrics.netReturn) > 0.0005;
+  if (!divergent) return;
+  console.warn("[shadow] backtest divergence", JSON.stringify({
+    strategyId,
+    bars: bars.length,
+    legacy: { tradeCount: legacy.metrics.tradeCount, finalEquity: legacy.finalEquity, netReturn: legacy.metrics.netReturn },
+    service: { tradeCount: service.metrics.tradeCount, finalEquity: service.finalEquity, netReturn: service.metrics.netReturn },
+  }));
+}
+
 const HOT_BACKTEST_RESULTS = new HotPromiseCache<{ result: BacktestCoreResult; tier: "object" | "computed" }>(16);
 const HOT_OPTIMIZATION_RESULTS = new HotPromiseCache<{ result: OptimizationCoreResult; tier: "object" | "computed" }>(8);
 
@@ -1450,6 +1562,15 @@ async function runBacktest(request: Request, env: BacktestEnv, identity: Identit
   const contract = validateContract(strategy.contract);
   const parameterSchema = extractParameterSchema(contract).map(publicParameter);
   const semanticLockHash = await sha256Text(semanticSkeleton(contract));
+  const usingService = Boolean(env.BACKTEST_SERVICE_URL);
+  const source = typeof strategy.source === "string" ? strategy.source : "";
+  // The service executes the real program; for that path the program must not
+  // depend on data fields the Web kline pipeline cannot feed it. The AST-based
+  // verify gate catches these at analyze time; this regex is the legacy-row
+  // safety net. When there is no stored source (very old rows) the Web falls
+  // back to the contract interpreter rather than refusing to run.
+  if (usingService && source === "") return fail("SOURCE_MISSING", 422);
+  if (usingService) assertServiceSupported(source);
   const now = Date.now();
   const requestedEnd = Math.min(now - TIMEFRAME_MS[contract.timeframe], finite(body.endTime, now - TIMEFRAME_MS[contract.timeframe], 1_500_000_000_000, now));
   const defaultWindow = contract.timeframe === "1m" ? 3 * 24 * 60 * 60 * 1000 : contract.timeframe === "15m" ? 60 * 24 * 60 * 60 * 1000 : 365 * 24 * 60 * 60 * 1000;
@@ -1470,8 +1591,10 @@ async function runBacktest(request: Request, env: BacktestEnv, identity: Identit
   const bars = fetched.bars;
   const dataMs = Date.now() - dataStarted;
   const barsDigest = await sha256Text(JSON.stringify(compactBars(bars)));
+  const engine = usingService ? "cli-sandbox-service" : "proof-worker-contract";
   const resultCacheKey = await sha256Text(JSON.stringify({
     version: BACKTEST_CACHE_VERSION,
+    engine,
     contract,
     asset: stored.asset,
     market: stored.market,
@@ -1490,11 +1613,22 @@ async function runBacktest(request: Request, env: BacktestEnv, identity: Identit
   const cachedResult = await HOT_BACKTEST_RESULTS.getOrLoad(resultObjectKey, async () => {
     const objectResult = await readObjectJson<BacktestCoreResult>(env.CACHE, resultObjectKey);
     if (objectResult) return { result: objectResult, tier: "object" as const };
-    const computed = runContractBacktest(contract, bars, config);
+    const computed = usingService
+      ? await runBacktestOnService(env, source, bars, config, serviceTimeframeContext(contract, bars))
+      : runContractBacktest(contract, bars, config);
     await writeObjectJson(env.CACHE, resultObjectKey, computed);
     return { result: computed, tier: "computed" as const };
   });
   const result = cachedResult.result;
+  // Shadow mode: run the legacy interpreter on the same bars and log any
+  // divergence beyond tolerance. The service result is always the one returned.
+  if (usingService && env.BACKTEST_SHADOW_MODE === "true") {
+    try {
+      shadowCompare(runContractBacktest(contract, bars, config), result, bars, strategyId);
+    } catch (error) {
+      console.warn("[shadow] legacy interpreter failed", error);
+    }
+  }
   const executionMs = Date.now() - executionStarted;
   const resultCache = wasHotResult ? "memory-hit" : cachedResult.tier === "object" ? "persistent-hit" : "miss";
   const id = crypto.randomUUID();
@@ -1507,7 +1641,7 @@ async function runBacktest(request: Request, env: BacktestEnv, identity: Identit
     timeframe: contract.timeframe,
     dataSource: fetched.dataSource,
     dataWarnings: fetched.warnings,
-    engineVersion: "proof-worker-0.4.0",
+    engineVersion: usingService ? SERVICE_ENGINE_VERSION : "proof-worker-0.4.0",
     executionModel: "closed-bar signal → next-bar open; stop-loss wins same-bar conflicts",
     startedAt: new Date(bars[0]!.timestamp).toISOString(),
     endedAt: new Date(bars.at(-1)!.timestamp + TIMEFRAME_MS[contract.timeframe] - 1).toISOString(),

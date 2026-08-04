@@ -3,7 +3,7 @@ export type ContractTimeframe = "1m" | "15m" | "1h" | "4h";
 export interface ContractDecision {
   type: "open" | "close";
   side: "long" | "short" | null;
-  sizeKind: "riskPercent" | "fixedNotional" | null;
+  sizeKind: "riskPercent" | "equityPercent" | "fixedNotional" | null;
   sizeValue: number | null;
   stopLossPercent: number | null;
   takeProfitRiskReward: number | null;

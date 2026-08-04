@@ -37,6 +37,8 @@ interface Env {
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   GOOGLE_TOKEN_PROXY_URL?: string;
+  BACKTEST_SERVICE_URL?: string;
+  BACKTEST_SHADOW_MODE?: string;
 }
 
 interface ExecutionContext {

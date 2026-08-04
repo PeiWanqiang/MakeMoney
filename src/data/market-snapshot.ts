@@ -105,6 +105,19 @@ export async function writeMarketSnapshot(
         nullable: false,
       });
     }
+    // Binance-only optional turnover/taker columns; a whole partition is a single
+    // source, so a column is present for every row or for none. Absent columns
+    // simply do not exist in the Parquet file, keeping old partitions readable.
+    for (const field of ["quoteVolume", "takerBuyBaseVolume", "takerBuyQuoteVolume"] as const) {
+      if (data.bars.some((row) => row[field] !== undefined)) {
+        columnData.push({
+          name: field,
+          data: data.bars.map((row) => row[field] ?? 0),
+          type: "DOUBLE",
+          nullable: false,
+        });
+      }
+    }
     await parquetWriteFile({
       filename: temporaryDataPath,
       columnData,
@@ -188,6 +201,9 @@ export async function loadMarketSnapshot(manifestPath: string): Promise<{
   const bars = rows.map((row) => {
     const record = row as Record<string, unknown>;
     const markPrice = record.markPrice;
+    const quoteVolume = record.quoteVolume;
+    const takerBuyBaseVolume = record.takerBuyBaseVolume;
+    const takerBuyQuoteVolume = record.takerBuyQuoteVolume;
     return {
       timestamp: requiredNumber(record, "timestamp"),
       open: requiredNumber(record, "open"),
@@ -197,6 +213,9 @@ export async function loadMarketSnapshot(manifestPath: string): Promise<{
       volume: requiredNumber(record, "volume"),
       fundingRate: requiredNumber(record, "fundingRate"),
       ...(typeof markPrice === "number" && Number.isFinite(markPrice) ? { markPrice } : {}),
+      ...(typeof quoteVolume === "number" && Number.isFinite(quoteVolume) ? { quoteVolume } : {}),
+      ...(typeof takerBuyBaseVolume === "number" && Number.isFinite(takerBuyBaseVolume) ? { takerBuyBaseVolume } : {}),
+      ...(typeof takerBuyQuoteVolume === "number" && Number.isFinite(takerBuyQuoteVolume) ? { takerBuyQuoteVolume } : {}),
     } satisfies MarketBar;
   });
   return { manifest, bars };

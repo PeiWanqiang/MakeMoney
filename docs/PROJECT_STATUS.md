@@ -1,7 +1,7 @@
 # 项目状态与后续工作
 
-最后更新：2026-08-01
-当前阶段：Phase 1 Web 产品纵切 + 语义锁定参数优化实验室（Stage 2 已完成）+ 账户与分步产品形态
+最后更新：2026-08-04
+当前阶段：Backtest Service 迁移 Phase 1（服务骨架 + 回测代理）与 Phase 2（语义准入门禁）已交付
 状态口径：只有“代码存在、自动测试通过、真实数据或端到端样例验证”才记为已实现；只有文档方案的不记为产品已完成。
 
 项目级变更口径：所有新能力和问题修复必须遵循[泛化优先准入规范](GENERALIZATION_POLICY.md)。单一样例通过不能记为已实现；至少还需参数变体、结构变体、边界/拒绝和语义一致性证据。
@@ -240,6 +240,25 @@ Funding 策略的负结果是有效验证结果，不应为得到正收益而修
 - [ ] Stage 3：AI 只读实验设计与结果解释；AI 不负责数值执行，也不能修改历史结果。
 - [ ] 参数版 TypeScript 程序源码物化尚未实现；Web 当前以服务端机器契约为执行真相，不能把空白源码宣称为完整 SDK 源码版本。
 - [ ] 异步任务队列、用户级并发与成本配额、取消和进度持久化尚未完成。
+
+### 2.10 数据字段扩展 + Backtest Service 迁移 Phase 0（2026-08-04）
+
+- [x] Binance K 线 12 列归档补读：`quote_asset_volume`(7)、`taker_buy_base_volume`(9)、`taker_buy_quote_volume`(10) 入库，经 Parquet 快照读写、15m/1h/4h 聚合求和透传，SDK/沙箱/编译器声明/prompt 暴露 `market.quoteVolume` 等字段（缺失为 `null`），可用作 `sma/ema/highest/lowest/standardDeviation/bollingerBands/percentChange` 字段入参；解析、往返、聚合测试已覆盖。存量 ZIP 无需重下，重跑解析即可。
+- [x] 单引擎黄金基线 `test/engine-golden.test.ts`：阈值/状态、20/50 EMA、负 Funding（含 Funding PnL）、Open Interest、多周期（15m 主 + 已闭合 1h RSI）、同 Bar 止盈止损冲突（止损优先）共 7 用例全部钉死；作为 Backtest Service 迁移回归基线。
+- [x] 根 `vitest.config.ts` 排除 `web/`：根 `npm test` 不再误抓 Web 包测试（Web 有自己的 `node --test` 套件）。
+- [ ] 跨引擎实时分叉量化推迟到 Phase 1 shadow 模式；根包与 `web/` 隔离（Web 引擎依赖 fflate + Cloudflare 类型，根 `tsc` 无法 import），详见 `docs/BACKTEST_SERVICE_PLAN.md` Phase 0。
+
+### 2.11 Backtest Service 迁移 Phase 1 + 2（2026-08-04）
+
+- [x] 独立 Node Fastify 服务 `services/backtest/`：`POST /v1/backtest`（编译 → `runBacktest` → 指标）与 `POST /v1/strategy/verify`（编译 + 类型检查 + 反向语义核对 + 正反行为场景 + 能力扫描）；根 `npm run backtest:service` 启动。
+- [x] 共享契约 `src/contracts/`：`backtest-1.0`、`verify-1.0`、`error-1.0` wire 格式与类型。
+- [x] 单引擎补齐 `equityPercent` 仓位（core types / sandbox / backtest / SDK 声明 / 语义抽取），CLI 沙箱覆盖 Web 契约全部 sizeKind。
+- [x] `src/semantics/capabilities.ts`：静态扫描策略程序使用的数据能力（ohlcv / turnover / markPrice / fundingRate / openInterest / multiTimeframe / state / indicators / arithmetic），覆盖直接字段读、指标与 history 字段实参、timeframe 视图、解构 market。
+- [x] Web `/api/backtest/run` 在 `BACKTEST_SERVICE_URL` 设置时代理到服务执行真实程序；未设置回落旧解释器；`BACKTEST_SHADOW_MODE="true"` 同跑旧解释器按阈值告警分叉；缓存键含 engine 并升版 `backtest-v5-engine-service`；`vite.config.ts` 注入默认 `http://127.0.0.1:8780`。
+- [x] Web analyze 语义准入门禁：`ready` 制品在落库前调用 `/v1/strategy/verify`，通过才持久化；不一致返回 `STRATEGY_VERIFY_FAILED`；funding/OI/mark/turnover 能力缺口在 analyze 阶段降级为 `unsupported` 并披露缺口，不再回测时抛 `OHLCV_ONLY` 500；服务不可达时回落 substring `structuralChecks`。
+- [x] 根测试新增 15 项：服务 `/v1/backtest`（含 equityPercent + funding）与 `/v1/strategy/verify`（通过 / 能力缺口 / 规则错配 / 编译失败）、能力扫描 6 组；`npm test` 19 文件 86 项全部通过，`npm run typecheck` 通过，web 包 `tsc --noEmit` 通过。
+- [ ] Web 引擎删除（`IndicatorEngine`/`runContractBacktest`/正则条件解释）留到 Phase 5；优化路径（`/api/optimization/*`）仍在旧引擎，Phase 3 迁移。
+- [ ] 生产 Web→服务认证（共享 secret / mTLS + 请求签名）与服务部署（Cloud Run / Fargate）未做；本地 `node --test` Web 套件需 `npm run build` 后由用户复跑。
 
 ## 3. 已实现但尚未完成验证
 

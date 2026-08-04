@@ -54,20 +54,28 @@
 
 ## 6. 迁移步骤（每阶段可独立合并上线）
 
-### Phase 0 — 基线锁定（1–2 天）
-- 起草**跨引擎黄金测试**：同一 bars + 同一策略（覆盖 funding / OI / 多周期 / 同 Bar 止盈止损冲突 / 边界），CLI 沙箱 vs Web 解释器，逐交易、逐权益点 diff。
-- 目的：把现有分叉量化成数字，作为迁移的回归基准；Phase 3 之后该测试改为对服务 API 的契约测试。
+### Phase 0 — 基线锁定（已交付 2026-08-04）
+- **单引擎黄金基线** `test/engine-golden.test.ts`：6 个维度、7 个用例，全部钉死在 CLI 沙箱上——阈值/状态、20/50 EMA 趋势、负 Funding 门禁（含 Funding PnL）、Open Interest 门禁、多周期（15m 主周期 + 已闭合 1h RSI）、同 Bar 止盈止损冲突（止损优先确定性）+ 可复现性/权益曲线不变量。这是迁移的回归基线：Phase 3/4 改动引擎后必须保持这些结果不变。
+- **跨引擎实时分叉**：不在单元测试层面做。已核实根包与 `web/` 是两套隔离包环境（Web 引擎依赖 `fflate` + Cloudflare 类型，根 `tsc` 无法 import；CLI 沙箱依赖 `quickjs-emscripten`，Web 包没有），单元级跨 import 不可行。实时分叉量化推迟到 **Phase 1 shadow 模式**（两个引擎同场运行对比），这本身就是"执行必须收敛进单服务"的又一证据。
+- 基线正确性锚点：CLI 引擎已通过 Python 参考引擎逐交易逐权益点交叉验证（0 差异），黄金值可信。
 
-### Phase 1 — 服务骨架 + 回测代理（2–4 天）
-- 建 `services/backtest/`，暴露 `POST /v1/backtest`：`compileStrategySource` → `runBacktest` → `calculateBacktestMetrics`。
-- Web `/api/backtest/run` 改为代理到服务；**shadow 模式**：同时跑旧解释器，差异超阈值告警，不回滚 UI。feature-flag 切换。
-- 统一结果 schema，Web 前端字段映射适配。
-- 部署：本地 `npm run backtest:service`；生产 Cloud Run / Fargate。Web→服务认证：共享 secret / mTLS + 请求签名。
+### Phase 1 — 服务骨架 + 回测代理（已交付 2026-08-04）
+- [x] 建 `services/backtest/`，Fastify 暴露 `POST /v1/backtest`：`compileStrategySource` → `runBacktest` → `calculateBacktestMetrics`；`POST /v1/strategy/verify`（Phase 2）。
+- [x] 共享契约 `src/contracts/`（`backtest-1.0` / `verify-1.0` / `error-1.0`），服务与 Web 走同一 wire 格式。
+- [x] 引擎补齐 `equityPercent` 仓位：core types / sandbox / backtest / SDK 声明 / 语义抽取，单引擎覆盖 Web 契约的全部 sizeKind。
+- [x] Web `/api/backtest/run` 在 `BACKTEST_SERVICE_URL` 设置时代理到服务执行真实程序；未设置时回落旧解释器（feature-flag）。
+- [x] **shadow 模式**：`BACKTEST_SHADOW_MODE="true"` 时同跑旧解释器，按 tradeCount/finalEquity/netReturn 阈值比较并告警，不回滚 UI。
+- [x] 缓存键加入 `engine` 并升版 `backtest-v5-engine-service`，避免新旧引擎结果串键。
+- [x] 代理路径保留 `assertServiceSupported` 源码级安全网：Web K 线缺 funding/OI/mark/turnover 数据时按历史 `OHLCV_ONLY` 拒绝，防止静默用 0 计算。
+- 部署：本地 `npm run backtest:service`；生产 Cloud Run / Fargate。Web→服务认证（共享 secret / mTLS + 请求签名）仍待做。
+- 前端字段映射：`metrics.buyAndHoldReturn` 由 Web 从 bars 本地补算；其余 metrics/trades/equityCurve 直接透传。
 
-### Phase 2 — 语义准入门禁（2–3 天）
-- 服务加 `POST /v1/strategy/verify`，Web analyze 在 `ready` 前调用，通过才落库（替换现有 substring 扫描 `structuralChecks`）。
-- 效果：契约与程序强制一致；funding/OI 等能力在 analyze 阶段就被能力声明拦截，不再 backtest 时抛 `OHLCV_ONLY` 500。
-- `enforceEntryConditionFloor` 保留（补充性，不是主门禁）。
+### Phase 2 — 语义准入门禁（已交付 2026-08-04）
+- [x] 服务 `POST /v1/strategy/verify`：编译 + 类型检查 + `verifyStrategySemantics`（反向抽取 + 契约逐条比对 + 正反场景）+ 能力扫描。
+- [x] Web analyze 对 `ready` 制品在落库前调用 verify，通过才持久化为可运行；编译/语义不一致返回 `STRATEGY_VERIFY_FAILED`，不再落库。
+- [x] 能力拦截：`availableCapabilities`（Web 默认 OHLCV+indicators+multiTimeframe+state+arithmetic）之外的 funding/OI/mark/turnover 在 analyze 阶段降级为 `unsupported` 并披露能力缺口，不再 backtest 时抛 `OHLCV_ONLY` 500。
+- [x] `enforceEntryConditionFloor` 保留（补充性，不是主门禁）。
+- [x] 服务不可达时 verify 检查标记 `not_applicable` 并回落 substring `structuralChecks`，analyze 不被基础设施拖死。
 
 ### Phase 3 — 优化迁移（3–5 天）
 - 把 `extractParameterSchema` / `applyParameters` / `walkForwardEvidence` / `sensitivityEvidence` / `costStressEvidence` / `regimeEvidence` / 盲测从 `web/worker/backtest-api.ts` 移植为 `src/optimization/`，执行从 `runContractBacktest` 换成 `runBacktest`（真实程序）。

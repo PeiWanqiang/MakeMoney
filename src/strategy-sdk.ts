@@ -1,5 +1,16 @@
 import type { JsonValue, StrategyDecision } from "./core/types.js";
 
+/** Fields an indicator or window can run over. Includes Binance turnover/taker bases. */
+export type MarketField =
+  | "open"
+  | "high"
+  | "low"
+  | "close"
+  | "volume"
+  | "quoteVolume"
+  | "takerBuyBaseVolume"
+  | "takerBuyQuoteVolume";
+
 export interface StrategyContext {
   readonly market: {
     readonly timestamp: number;
@@ -11,6 +22,9 @@ export interface StrategyContext {
     readonly markPrice: number;
     readonly fundingRate: number;
     readonly openInterest: number | null;
+    readonly quoteVolume: number | null;
+    readonly takerBuyBaseVolume: number | null;
+    readonly takerBuyQuoteVolume: number | null;
   };
   readonly account: {
     readonly equity: number;
@@ -22,12 +36,12 @@ export interface StrategyContext {
     readonly unrealizedPnl: number;
   };
   readonly indicators: {
-    sma(field: "open" | "high" | "low" | "close" | "volume", period: number, offset?: number): number | null;
-    ema(field: "open" | "high" | "low" | "close" | "volume", period: number, offset?: number): number | null;
-    highest(field: "open" | "high" | "low" | "close" | "volume", period: number, offset?: number): number | null;
-    lowest(field: "open" | "high" | "low" | "close" | "volume", period: number, offset?: number): number | null;
-    percentChange(field: "close" | "openInterest", periods: number): number | null;
-    standardDeviation(field: "open" | "high" | "low" | "close" | "volume", period: number, offset?: number): number | null;
+    sma(field: MarketField, period: number, offset?: number): number | null;
+    ema(field: MarketField, period: number, offset?: number): number | null;
+    highest(field: MarketField, period: number, offset?: number): number | null;
+    lowest(field: MarketField, period: number, offset?: number): number | null;
+    percentChange(field: "close" | "openInterest" | MarketField, periods: number): number | null;
+    standardDeviation(field: MarketField, period: number, offset?: number): number | null;
     rsi(field: "close", period: number, offset?: number): number | null;
     atr(period: number, offset?: number): number | null;
     macd(
@@ -38,7 +52,7 @@ export interface StrategyContext {
       offset?: number,
     ): { macd: number; signal: number; histogram: number } | null;
     bollingerBands(
-      field: "open" | "high" | "low" | "close" | "volume",
+      field: MarketField,
       period: number,
       standardDeviations?: number,
       offset?: number,
@@ -46,7 +60,7 @@ export interface StrategyContext {
   };
   readonly history: {
     values(
-      field: "open" | "high" | "low" | "close" | "volume" | "markPrice" | "fundingRate" | "openInterest",
+      field: MarketField | "markPrice" | "fundingRate" | "openInterest",
       period: number,
       offset?: number,
     ): readonly number[] | null;
@@ -60,6 +74,9 @@ export interface StrategyContext {
       markPrice: number;
       fundingRate: number;
       openInterest: number | null;
+      quoteVolume: number | null;
+      takerBuyBaseVolume: number | null;
+      takerBuyQuoteVolume: number | null;
     }[] | null;
   };
   timeframe(interval: "1m" | "15m" | "1h" | "4h"): Pick<StrategyContext, "market" | "indicators" | "history"> | null;

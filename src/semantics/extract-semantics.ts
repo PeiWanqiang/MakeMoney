@@ -205,7 +205,10 @@ function decisionFromReturn(statement: ts.ReturnStatement): ContractDecision | u
   const side = literal(objectProperty(statement.expression, "side"));
   const sizeKind = size && ts.isObjectLiteralExpression(size) ? literal(objectProperty(size, "kind")) : undefined;
   const sizeValue = size && ts.isObjectLiteralExpression(size) ? numberProperty(size, "value") : null;
-  if ((side !== "long" && side !== "short") || (sizeKind !== "riskPercent" && sizeKind !== "fixedNotional")) return undefined;
+  if (
+    (side !== "long" && side !== "short")
+    || (sizeKind !== "riskPercent" && sizeKind !== "equityPercent" && sizeKind !== "fixedNotional")
+  ) return undefined;
   return {
     type,
     side,
