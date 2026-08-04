@@ -132,25 +132,48 @@ globalThis.fetch = undefined;
 const defineStrategy = (definition) => definition;
 const __strategy = (${program.javascript});
 const __frameBars = Object.create(null);
-const __frameEmaCaches = Object.create(null);
+const __frameCaches = Object.create(null);
 __frameBars.current = [];
-__frameEmaCaches.current = Object.create(null);
+__frameCaches.current = Object.create(null);
 let __bars = __frameBars.current;
-let __emaCaches = __frameEmaCaches.current;
+let __caches = __frameCaches.current;
 
 function __withFrame(key, callback) {
   const previousBars = __bars;
-  const previousCaches = __emaCaches;
+  const previousCaches = __caches;
   __frameBars[key] ??= [];
-  __frameEmaCaches[key] ??= Object.create(null);
+  __frameCaches[key] ??= Object.create(null);
   __bars = __frameBars[key];
-  __emaCaches = __frameEmaCaches[key];
+  __caches = __frameCaches[key];
   try {
     return callback();
   } finally {
     __bars = previousBars;
-    __emaCaches = previousCaches;
+    __caches = previousCaches;
   }
+}
+
+/**
+ * Returns an indicator series for the active frame, extended to cover every bar
+ * appended since the last call.
+ *
+ * Wilder-smoothed RSI and ATR and the MACD signal line each depend on the whole
+ * prefix of bars, so recomputing one from index 0 on every call made a run
+ * quadratic in bar count: a single RSI over 10,000 bars cost about eleven
+ * seconds, and three such indicators together cost thirty. Each series is now
+ * built one bar at a time, in the same order and with the same arithmetic the
+ * one-shot version used, so the cached values are identical to what recomputing
+ * would have produced.
+ */
+function __series(key, create, advance) {
+  let cache = __caches[key];
+  if (!cache) {
+    cache = create();
+    cache.values = [];
+    __caches[key] = cache;
+  }
+  while (cache.values.length < __bars.length) advance(cache, cache.values.length);
+  return cache;
 }
 
 function __value(field, offset = 0) {
@@ -202,11 +225,7 @@ function __advanceEma(cache, index) {
 }
 
 function __appendBars(rows) {
-  for (const row of rows) {
-    __bars.push(Object.freeze(row));
-    const index = __bars.length - 1;
-    for (const key of Object.keys(__emaCaches)) __advanceEma(__emaCaches[key], index);
-  }
+  for (const row of rows) __bars.push(Object.freeze(row));
 }
 
 function __appendTimeframes(timeframes) {
@@ -220,17 +239,15 @@ function __sma(field, period, offset = 0) {
   return values ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 }
 
+function __emaSeries(field, period) {
+  return __series("ema:" + field + ":" + period, () => ({ field, period, alpha: 2 / (period + 1) }), __advanceEma).values;
+}
+
 function __ema(field, period, offset = 0) {
   if (!Number.isInteger(period) || period <= 0 || !Number.isInteger(offset) || offset < 0) return null;
-  const key = field + ":" + period;
-  let cache = __emaCaches[key];
-  if (!cache) {
-    cache = { field, period, alpha: 2 / (period + 1), values: [] };
-    __emaCaches[key] = cache;
-    for (let index = 0; index < __bars.length; index += 1) __advanceEma(cache, index);
-  }
-  const index = cache.values.length - 1 - offset;
-  return index >= 0 ? cache.values[index] : null;
+  const values = __emaSeries(field, period);
+  const index = values.length - 1 - offset;
+  return index >= 0 ? values[index] : null;
 }
 
 function __highest(field, period, offset = 0) {
@@ -257,24 +274,34 @@ function __standardDeviation(field, period, offset = 0) {
   return Math.sqrt(variance);
 }
 
+function __advanceRsi(cache, index) {
+  if (index < cache.period) {
+    cache.values.push(null);
+    return;
+  }
+  if (index === cache.period) {
+    for (let cursor = 1; cursor <= cache.period; cursor += 1) {
+      const change = __bars[cursor][cache.field] - __bars[cursor - 1][cache.field];
+      cache.averageGain += Math.max(0, change) / cache.period;
+      cache.averageLoss += Math.max(0, -change) / cache.period;
+    }
+  } else {
+    const change = __bars[index][cache.field] - __bars[index - 1][cache.field];
+    cache.averageGain = (cache.averageGain * (cache.period - 1) + Math.max(0, change)) / cache.period;
+    cache.averageLoss = (cache.averageLoss * (cache.period - 1) + Math.max(0, -change)) / cache.period;
+  }
+  if (cache.averageLoss === 0) {
+    cache.values.push(cache.averageGain === 0 ? 50 : 100);
+    return;
+  }
+  cache.values.push(100 - 100 / (1 + cache.averageGain / cache.averageLoss));
+}
+
 function __rsi(field, period, offset = 0) {
   if (!Number.isInteger(period) || period <= 0 || !Number.isInteger(offset) || offset < 0) return null;
-  const end = __bars.length - offset;
-  if (end < period + 1) return null;
-  let averageGain = 0;
-  let averageLoss = 0;
-  for (let index = 1; index <= period; index += 1) {
-    const change = __bars[index][field] - __bars[index - 1][field];
-    averageGain += Math.max(0, change) / period;
-    averageLoss += Math.max(0, -change) / period;
-  }
-  for (let index = period + 1; index < end; index += 1) {
-    const change = __bars[index][field] - __bars[index - 1][field];
-    averageGain = (averageGain * (period - 1) + Math.max(0, change)) / period;
-    averageLoss = (averageLoss * (period - 1) + Math.max(0, -change)) / period;
-  }
-  if (averageLoss === 0) return averageGain === 0 ? 50 : 100;
-  return 100 - 100 / (1 + averageGain / averageLoss);
+  const values = __series("rsi:" + field + ":" + period, () => ({ field, period, averageGain: 0, averageLoss: 0 }), __advanceRsi).values;
+  const index = values.length - 1 - offset;
+  return index >= 0 ? values[index] : null;
 }
 
 function __trueRange(index) {
@@ -285,43 +312,70 @@ function __trueRange(index) {
   return Math.max(bar.high - bar.low, Math.abs(bar.high - previousClose), Math.abs(bar.low - previousClose));
 }
 
-function __atr(period, offset = 0) {
-  if (!Number.isInteger(period) || period <= 0 || !Number.isInteger(offset) || offset < 0) return null;
-  const end = __bars.length - offset;
-  if (end < period) return null;
-  let value = 0;
-  for (let index = 0; index < period; index += 1) value += __trueRange(index) / period;
-  for (let index = period; index < end; index += 1) value = (value * (period - 1) + __trueRange(index)) / period;
-  return value;
+function __advanceAtr(cache, index) {
+  if (index + 1 < cache.period) {
+    cache.values.push(null);
+    return;
+  }
+  if (index + 1 === cache.period) {
+    let value = 0;
+    for (let cursor = 0; cursor < cache.period; cursor += 1) value += __trueRange(cursor) / cache.period;
+    cache.value = value;
+  } else {
+    cache.value = (cache.value * (cache.period - 1) + __trueRange(index)) / cache.period;
+  }
+  cache.values.push(cache.value);
 }
 
-function __emaSeries(field, period) {
-  const key = field + ":" + period;
-  let cache = __emaCaches[key];
-  if (!cache) {
-    cache = { field, period, alpha: 2 / (period + 1), values: [] };
-    __emaCaches[key] = cache;
-    for (let index = 0; index < __bars.length; index += 1) __advanceEma(cache, index);
+function __atr(period, offset = 0) {
+  if (!Number.isInteger(period) || period <= 0 || !Number.isInteger(offset) || offset < 0) return null;
+  const values = __series("atr:" + period, () => ({ period, value: 0 }), __advanceAtr).values;
+  const index = values.length - 1 - offset;
+  return index >= 0 ? values[index] : null;
+}
+
+/**
+ * The signal line is an EMA over the MACD values that exist so far, so it is
+ * seeded from the first signalPeriod of them and then smoothed. The MACD line
+ * and the signal line are kept as two parallel numeric arrays rather than one
+ * object per bar, which keeps a 10,000-bar run well inside the memory limit.
+ */
+function __advanceMacd(cache, index) {
+  const fast = __emaSeries(cache.field, cache.fastPeriod);
+  const slow = __emaSeries(cache.field, cache.slowPeriod);
+  const macd = typeof fast[index] === "number" && typeof slow[index] === "number" ? fast[index] - slow[index] : null;
+  cache.values.push(macd);
+  if (macd === null) {
+    cache.signals.push(null);
+    return;
   }
-  return cache.values;
+  cache.available += 1;
+  if (cache.available < cache.signalPeriod) {
+    cache.seedSum += macd;
+    cache.signals.push(null);
+    return;
+  }
+  if (cache.available === cache.signalPeriod) {
+    cache.seedSum += macd;
+    cache.signal = cache.seedSum / cache.signalPeriod;
+  } else {
+    cache.signal = cache.alpha * macd + (1 - cache.alpha) * cache.signal;
+  }
+  cache.signals.push(cache.signal);
 }
 
 function __macd(field, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9, offset = 0) {
   if (![fastPeriod, slowPeriod, signalPeriod].every(value => Number.isInteger(value) && value > 0) || fastPeriod >= slowPeriod) return null;
-  const target = __bars.length - 1 - offset;
-  const fast = __emaSeries(field, fastPeriod);
-  const slow = __emaSeries(field, slowPeriod);
-  const macdValues = [];
-  for (let index = 0; index <= target; index += 1) {
-    macdValues.push(typeof fast[index] === "number" && typeof slow[index] === "number" ? fast[index] - slow[index] : null);
-  }
-  const available = macdValues.filter(value => typeof value === "number");
-  if (available.length < signalPeriod) return null;
-  const alpha = 2 / (signalPeriod + 1);
-  let signal = available.slice(0, signalPeriod).reduce((sum, value) => sum + value, 0) / signalPeriod;
-  for (let index = signalPeriod; index < available.length; index += 1) signal = alpha * available[index] + (1 - alpha) * signal;
-  const macd = macdValues[target];
-  return typeof macd === "number" ? { macd, signal, histogram: macd - signal } : null;
+  const cache = __series(
+    "macd:" + field + ":" + fastPeriod + ":" + slowPeriod + ":" + signalPeriod,
+    () => ({ field, fastPeriod, slowPeriod, signalPeriod, alpha: 2 / (signalPeriod + 1), available: 0, seedSum: 0, signal: 0, signals: [] }),
+    __advanceMacd,
+  );
+  const index = cache.values.length - 1 - offset;
+  if (index < 0) return null;
+  const macd = cache.values[index];
+  const signal = cache.signals[index];
+  return typeof macd === "number" && typeof signal === "number" ? { macd, signal, histogram: macd - signal } : null;
 }
 
 function __bollingerBands(field, period, standardDeviations = 2, offset = 0) {

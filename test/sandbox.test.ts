@@ -71,6 +71,57 @@ describe("strategy sandbox", () => {
     expect(state).toEqual({ ema: 102.75 });
   });
 
+  // Wilder-smoothed RSI and ATR and the MACD signal line each depend on the
+  // whole prefix of bars, so they are accumulated one bar at a time rather than
+  // recomputed from index 0 on every call. Feeding the same history bar by bar
+  // and all at once must therefore land on identical values, including at the
+  // warm-up boundary where the seeded and smoothed branches meet.
+  it("accumulates prefix-dependent indicators identically bar by bar and in one shot", async () => {
+    const indicatorStrategy = `defineStrategy({
+      id: "test.incremental-prefix",
+      name: "Incremental prefix indicators",
+      version: 1,
+      onBar(ctx) {
+        ctx.state.set("rsi", ctx.indicators.rsi("close", 3));
+        ctx.state.set("rsiLagged", ctx.indicators.rsi("close", 3, 2));
+        ctx.state.set("atr", ctx.indicators.atr(3));
+        ctx.state.set("macd", JSON.stringify(ctx.indicators.macd("close", 2, 4, 3)));
+        return { type: "hold" };
+      }
+    })`;
+    const closes = [100, 101, 99, 103, 102, 106, 104, 109, 107, 112, 110, 115];
+    const bars = closes.map((close, index) => ({
+      ...bar,
+      timestamp: bar.timestamp + index * 60_000,
+      open: close,
+      high: close + 1.5,
+      low: close - 1.5,
+      close,
+    }));
+    const oneShot = await runStrategyProgram(indicatorStrategy, { ...invocation, bars });
+    const session = await StrategySandboxSession.create(compileStrategySource(indicatorStrategy));
+    let state = {};
+    try {
+      for (const current of bars) {
+        const result = await session.runBar(current, invocation.position, invocation.equity, state);
+        state = result.state;
+      }
+    } finally {
+      session.dispose();
+    }
+    expect(state).toEqual(oneShot.state);
+    expect(state).toMatchObject({
+      rsi: expect.closeTo(79.012, 3),
+      rsiLagged: expect.closeTo(79.099, 3),
+      atr: expect.closeTo(5.208, 3),
+    });
+    expect(JSON.parse((state as { macd: string }).macd)).toMatchObject({
+      macd: expect.closeTo(1.905, 3),
+      signal: expect.closeTo(1.575, 3),
+      histogram: expect.closeTo(0.33, 3),
+    });
+  });
+
   it("provides mainstream indicators and bounded read-only history", async () => {
     const indicatorStrategy = `defineStrategy({
       id: "test.mainstream-indicators",

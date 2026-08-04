@@ -142,7 +142,7 @@ test("keeps customer promises and secret handling explicit", async () => {
   assert.match(en, /not investment advice/i);
   assert.match(en, /not a promise of returns/i);
   assert.match(workspace, /copy\.methodTitle/);
-  assert.match(worker, /strategy-intent-v5-entry-condition-floor/);
+  assert.match(worker, /strategy-intent-v6-sdk-declaration/);
   assert.match(backtest, /closed-bar signal/);
   assert.match(backtest, /semanticSkeleton/);
   assert.match(backtest, /MAX_OPTIMIZATION_TRIALS = 16/);

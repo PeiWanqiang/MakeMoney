@@ -514,6 +514,12 @@ export const en: Messages = {
     RANGE_TOO_LARGE: (timeframe: string, maxBars: string) => `A ${timeframe} backtest covers at most ${maxBars} bars. Please shorten the date range.`,
     OHLCV_ONLY: "Web backtests only carry OHLCV. Funding rate and open interest strategies need the full local engine.",
     STRATEGY_VERIFY_FAILED: "The generated program does not match the understood strategy. Please adjust and try again.",
+    STRATEGY_VERIFY_UNAVAILABLE: "The strategy verification service is temporarily unavailable, so the program cannot be confirmed runnable. Please retry shortly.",
+    COMPILE_FAILED: "This strategy's program does not compile, so it cannot be backtested. Please regenerate the strategy.",
+    SOURCE_MISSING: "This strategy has no stored executable program. Please regenerate it before backtesting.",
+    BACKTEST_SERVICE_ERROR: "The backtest engine returned an error. Please retry shortly.",
+    NOT_CONFIRMED: "Confirm this strategy before running a backtest.",
+    NOT_RUNNABLE: "This strategy is not in a runnable state, so it cannot be backtested.",
     unknown: "Something went wrong. Please retry.",
   },
 

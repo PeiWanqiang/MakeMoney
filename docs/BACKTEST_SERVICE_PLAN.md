@@ -75,7 +75,9 @@
 - [x] Web analyze 对 `ready` 制品在落库前调用 verify，通过才持久化为可运行；编译/语义不一致返回 `STRATEGY_VERIFY_FAILED`，不再落库。
 - [x] 能力拦截：`availableCapabilities`（Web 默认 OHLCV+indicators+multiTimeframe+state+arithmetic）之外的 funding/OI/mark/turnover 在 analyze 阶段降级为 `unsupported` 并披露能力缺口，不再 backtest 时抛 `OHLCV_ONLY` 500。
 - [x] `enforceEntryConditionFloor` 保留（补充性，不是主门禁）。
-- [x] 服务不可达时 verify 检查标记 `not_applicable` 并回落 substring `structuralChecks`，analyze 不被基础设施拖死。
+- [x] 服务不可达时 analyze 直接返回 `STRATEGY_VERIFY_UNAVAILABLE`（503 + `Retry-After: 30`），不再回落 substring `structuralChecks` 落库。原先的降级会把没验过的程序存成 `ready`：模型一旦生成另一套方言（缺 `id`/`version`、用 `openLong()` 而非 `onBar` 返回 decision），用户能确认但每次回测都 `COMPILE_FAILED`。服务是唯一执行引擎，没验过的程序之后也无法变成可运行的，所以停机必须在这里暴露。`structuralChecks` 仅保留给门禁不适用的情形（非 `ready` 状态，或未配置服务）。
+- [x] Web analyze 提示词内联 `STRATEGY_SDK_DECLARATION`（与 CLI 侧 `src/studio/prompt.ts` 同源），并给出程序形状硬性要求与最小可编译范例；`STRATEGY_CACHE_VERSION` 随之升到 `strategy-intent-v6-sdk-declaration`，旧提示词下缓存的制品不再被复用。
+- [x] `scripts/audit-strategy-sources.ts` 审计历史落库制品：编译每条 `ready` 源码，报告无法运行的行，`--apply` 归档它们。
 
 ### Phase 3 — 优化迁移（已交付 2026-08-04）
 - [x] `src/optimization/`：参数发现/应用（`parameter-discovery.ts`，契约 canonical、id 与 Web 完全一致）、候选生成、试次评估、walk-forward / 敏感性 / 成本压力 / 市场状态 / 多次选择惩罚门禁（`optimization.ts`）、一次性盲测纯计算（`blind-test.ts`）。

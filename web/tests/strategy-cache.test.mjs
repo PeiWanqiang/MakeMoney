@@ -81,3 +81,43 @@ test("reuses a validated strategy artifact without a second model request", asyn
     globalThis.fetch = originalFetch;
   }
 });
+
+// The service is the only engine that runs a strategy, so an artifact it never
+// verified can never become runnable. Persisting one anyway is what let a
+// program the compiler rejects reach a confirmed strategy whose every backtest
+// failed, so the outage has to surface here instead of at backtest time.
+test("refuses to bank a ready artifact while the verify service is unreachable", async () => {
+  const originalFetch = globalThis.fetch;
+  let verifyCalls = 0;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes("/v1/strategy/verify")) {
+      verifyCalls += 1;
+      throw new TypeError("connection refused");
+    }
+    assert.match(JSON.parse(init.body).messages[0].content, /defineStrategy/);
+    return Response.json({ id: "deepseek-2", choices: [{ message: { content: JSON.stringify(artifact) } }] });
+  };
+  try {
+    const workerUrl = new URL(`../dist/server/index.js?verify-outage=${Date.now()}`, import.meta.url);
+    const { default: worker } = await import(workerUrl.href);
+    const state = { cache: new Map(), submissions: [] };
+    const DB = { prepare(sql) { return new Statement(sql, state); }, async batch() { return []; } };
+    const response = await worker.fetch(
+      new Request("http://localhost/api/strategy/analyze", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ intent: "1h RSI14 小于30做多，止损5%，RSI大于55平仓", asset: "BTCUSDT", market: "Binance Perpetual" }),
+      }),
+      { DB, DEEPSEEK_API_KEY: "test", BACKTEST_SERVICE_URL: "http://127.0.0.1:9" },
+      {},
+    );
+    const body = await response.json();
+    assert.equal(response.status, 503, JSON.stringify(body));
+    assert.equal(body.code, "STRATEGY_VERIFY_UNAVAILABLE");
+    assert.equal(response.headers.get("retry-after"), "30");
+    assert.equal(verifyCalls, 1);
+    assert.equal(state.submissions.length, 0, "an unverified strategy must not be persisted");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

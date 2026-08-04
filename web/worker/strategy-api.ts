@@ -1,3 +1,4 @@
+import { STRATEGY_SDK_DECLARATION } from "../../src/compiler/strategy-sdk-declaration.js";
 import type { Identity } from "./auth";
 import { sha256Text } from "./cache";
 import { enforceEntryConditionFloor } from "./entry-condition-floor";
@@ -13,7 +14,9 @@ interface StrategyEnv {
    * gate (`POST /v1/strategy/verify`) before they are persisted as runnable.
    * Strategies that need data the Web pipeline cannot provide (funding/OI/etc.)
    * are downgraded to `unsupported` at analyze time instead of failing the
-   * backtest with OHLCV_ONLY later.
+   * backtest with OHLCV_ONLY later. An unreachable service fails the request
+   * rather than falling back, because an unverified program cannot become
+   * runnable later — the service is the only engine that executes it.
    */
   BACKTEST_SERVICE_URL?: string;
 }
@@ -22,8 +25,12 @@ interface StrategyEnv {
  * Bumped from `strategy-intent-v3-arithmetic-sizing` when the output language
  * stopped being guessed from the intent text and started following the UI locale:
  * a cached Chinese artifact must not be served to an English session.
+ *
+ * Bumped again when the prompt started carrying the Strategy SDK declaration:
+ * artifacts cached under the old prompt were generated without a program shape
+ * spec, so some of them do not compile and must never be replayed from cache.
  */
-const STRATEGY_CACHE_VERSION = "strategy-intent-v5-entry-condition-floor";
+const STRATEGY_CACHE_VERSION = "strategy-intent-v6-sdk-declaration";
 let strategySchemaReady: Promise<unknown> | null = null;
 
 interface AnalyzeBody {
@@ -47,11 +54,42 @@ Rules:
 - when clarification is needed, ask concise, independently answerable questions, with exactly one missing decision per question;
 - do not invent a timeframe, indicator period, threshold, direction, size, stop, take profit, cooldown, state or exit;
 - level comparisons are not crossing events;
-    - for ready, output a StrategyContract and a complete defineStrategy TypeScript program using obvious context.indicators calls;
+- for ready, output a StrategyContract and a complete defineStrategy TypeScript program that compiles against the SDK declaration below;
 - for needs_clarification, source is empty, contract is null, clarificationQuestions is non-empty;
 - for unsupported, source is empty, contract is null, unsupportedCapabilities is non-empty;
 - assumptions describe only explicit interpretations, not invented trading rules;
 - warnings should mention meaningful execution or data caveats.
+
+The program is executed verbatim by the sandbox, so it must compile against this exact SDK. Do not invent any API outside the declaration and do not use a different program shape.
+
+Strategy SDK declaration:
+${STRATEGY_SDK_DECLARATION}
+
+Program requirements, all mandatory:
+- source contains exactly one defineStrategy({...}) expression and no Markdown fence;
+- the definition object supplies id (stable slug), name, version (integer) and onBar;
+- onBar receives the context and returns a StrategyDecision object; it never calls helpers such as openLong or closePosition, and it never declares indicators in a context field;
+- read indicators through context.indicators.<name>(...) calls inside onBar, for example ctx.indicators.rsi("close", 14);
+- indicator calls return number | null during warm-up: store the result in a local variable, check that variable for null once, and reuse the narrowed variable;
+- signals come only from closed-bar context; execution occurs on the next bar;
+- every open decision defines a positive stopLossPercent;
+- never add network, files, time, randomness, exchange access, credentials, imports, loops, mutation, eval, or unsupported APIs.
+
+A minimal well-formed program:
+defineStrategy({
+  id: "rsi.oversold.long",
+  name: "RSI oversold long",
+  version: 1,
+  onBar(ctx) {
+    const rsi = ctx.indicators.rsi("close", 14);
+    if (rsi === null) return { type: "hold" };
+    if (ctx.position.side === "flat" && rsi < 30) {
+      return { type: "open", side: "long", size: { kind: "riskPercent", value: 0.01 }, stopLossPercent: 0.05 };
+    }
+    if (ctx.position.side === "long" && rsi > 55) return { type: "close", reason: "exit level reached" };
+    return { type: "hold" };
+  }
+})
 
     The contract is an audit record consumed by a deterministic backtest interpreter. Use exact canonical conditions only:
     - position.side == "flat" (or "long" / "short")
@@ -115,13 +153,18 @@ async function ensureSchema(db: D1Database): Promise<void> {
   await strategySchemaReady;
 }
 
-function json(value: unknown, status = 200): Response {
-  return Response.json(value, { status, headers: { "cache-control": "no-store" } });
+function json(value: unknown, status = 200, extraHeaders?: Record<string, string>): Response {
+  return Response.json(value, { status, headers: { "cache-control": "no-store", ...extraHeaders } });
 }
 
-/** Errors travel as a stable `code` so the browser can render them in the active locale. */
-function fail(code: string, status: number): Response {
-  return json({ error: code, code }, status);
+/**
+ * Errors travel as a stable `code` the browser renders in the active locale.
+ * A rejection the caller may usefully repeat carries `Retry-After`, so clients
+ * back off by a stated interval instead of guessing one.
+ */
+function fail(code: string, status: number, params?: Record<string, string | number>, retryAfterSeconds?: number): Response {
+  return json({ error: code, code, params, retryAfterSeconds }, status,
+    retryAfterSeconds === undefined ? undefined : { "retry-after": String(retryAfterSeconds) });
 }
 
 function cleanString(value: unknown, maximum: number): string {
@@ -205,7 +248,15 @@ const verifyLabel = (outputLanguage: "zh-CN" | "en") =>
 /**
  * Runs the service verify gate for a `ready` artifact. Returns null when the
  * service is not configured; returns `unavailable` when the service cannot be
- * reached, so analyze still works during an outage (basic checks fall back).
+ * reached.
+ *
+ * `unavailable` used to fall back to the substring structural checks and still
+ * persist the artifact as runnable. That is what let a program the compiler
+ * rejects reach a confirmed strategy: the model emitted a different dialect,
+ * the gate never ran, and every later backtest failed with COMPILE_FAILED
+ * against a row the customer had already confirmed. Since the service is the
+ * only execution engine, an unverified program has no way to become runnable
+ * later, so analyze now refuses instead of banking a strategy that cannot run.
  */
 async function verifyArtifact(
   env: StrategyEnv,
@@ -359,6 +410,13 @@ async function analyze(request: Request, env: StrategyEnv, identity: Identity): 
     if (verifyOutcome?.outcome === "failed") {
       return fail("STRATEGY_VERIFY_FAILED", 422);
     }
+    // A `ready` artifact that was never verified cannot be persisted: the
+    // service is the only engine, so an unverified program would surface as a
+    // failed backtest long after the customer confirmed it. 503 with a retry
+    // hint says the outage is ours and the request is worth repeating.
+    if (verifyOutcome?.outcome === "unavailable") {
+      return fail("STRATEGY_VERIFY_UNAVAILABLE", 503, undefined, 30);
+    }
     if (verifyOutcome?.outcome === "unsupported") {
       const labels = verifyOutcome.unsupported.map((capability) => capabilityLabel(capability, outputLanguage));
       const existing = Array.isArray(artifact.unsupportedCapabilities)
@@ -372,9 +430,10 @@ async function analyze(request: Request, env: StrategyEnv, identity: Identity): 
     }
   }
   const intentCheck: VerifyCheck = { id: "intent", label: "意图结构化", status: "passed", detail: "处理动作与解释字段完整" };
-  const checks = verifyOutcome && verifyOutcome.outcome !== "unavailable"
-    ? [intentCheck, verifyOutcome.check]
-    : structuralChecks(artifact);
+  // `failed` and `unavailable` already returned, so a gate result reaching here
+  // is `passed` or `unsupported`. The structural fallback remains for artifacts
+  // the gate never applies to: a non-`ready` status, or no service configured.
+  const checks = verifyOutcome ? [intentCheck, verifyOutcome.check] : structuralChecks(artifact);
   const id = crypto.randomUUID();
   const latencyMs = Date.now() - started;
   const result = {

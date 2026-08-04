@@ -512,6 +512,12 @@ export const zh = {
     RANGE_TOO_LARGE: (timeframe: string, maxBars: string) => `${timeframe} 周期最多回测 ${maxBars} 根 K 线，请缩短日期范围`,
     OHLCV_ONLY: "当前网页回测数据只包含 OHLCV；资金费率和持仓量策略请使用完整本地引擎",
     STRATEGY_VERIFY_FAILED: "生成的程序与策略理解不一致，请调整描述后重试",
+    STRATEGY_VERIFY_UNAVAILABLE: "策略校验服务暂时不可用，无法确认程序可执行，请稍后重试",
+    COMPILE_FAILED: "策略程序无法编译，无法回测；请重新生成这条策略",
+    SOURCE_MISSING: "这条策略没有保存可执行程序，请重新生成后再回测",
+    BACKTEST_SERVICE_ERROR: "回测引擎返回异常，请稍后重试",
+    NOT_CONFIRMED: "请先确认这条策略，然后再回测",
+    NOT_RUNNABLE: "这条策略不是可执行状态，无法回测",
     unknown: "发生了未知错误，请稍后重试",
   },
 
