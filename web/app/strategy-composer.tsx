@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { describeApiFailure, type ApiErrorPayload } from "./api-error";
 import { getMessages } from "./i18n";
 import { localePath, type Locale } from "./i18n/locales";
 
@@ -9,11 +10,7 @@ interface Props {
   locale: Locale;
 }
 
-interface AnalyzeResponse {
-  id?: string;
-  code?: string;
-  params?: Record<string, string | number>;
-}
+type AnalyzeResponse = ApiErrorPayload & { id?: string };
 
 const ASSETS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
 const MARKETS = ["Binance Perpetual", "Binance Spot"];
@@ -27,23 +24,14 @@ const MARKETS = ["Binance Perpetual", "Binance Spot"];
  * a real route change: reloading or sharing that URL resumes the same strategy.
  */
 export default function StrategyComposer({ locale }: Props) {
-  const { compose, errors } = getMessages(locale);
+  const messages = getMessages(locale);
+  const { compose, errors } = messages;
   const router = useRouter();
   const [intent, setIntent] = useState("");
   const [asset, setAsset] = useState(ASSETS[0]!);
   const [market, setMarket] = useState(MARKETS[0]!);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
-  function messageForCode(payload: AnalyzeResponse): string {
-    const code = payload.code as keyof typeof errors | undefined;
-    const entry = code ? errors[code] : undefined;
-    if (typeof entry === "function") {
-      const values = payload.params ?? {};
-      return entry(String(values.timeframe ?? ""), String(values.maxBars ?? ""));
-    }
-    return typeof entry === "string" ? entry : errors.ANALYZE_FAILED;
-  }
 
   async function analyze() {
     const submitted = intent.trim();
@@ -57,7 +45,7 @@ export default function StrategyComposer({ locale }: Props) {
         body: JSON.stringify({ intent: submitted, asset, market, locale }),
       });
       const payload = await response.json() as AnalyzeResponse;
-      if (!response.ok || !payload.id) throw new Error(messageForCode(payload));
+      if (!response.ok || !payload.id) throw new Error(describeApiFailure(messages, payload, errors.ANALYZE_FAILED));
       router.push(localePath(locale, `/s/${payload.id}/confirm`));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : errors.ANALYZE_FAILED);

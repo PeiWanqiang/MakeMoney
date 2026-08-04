@@ -245,6 +245,13 @@ type VerifyGateResult =
 const verifyLabel = (outputLanguage: "zh-CN" | "en") =>
   outputLanguage === "zh-CN" ? "程序与契约一致性" : "Program and contract consistency";
 
+const unavailableCheck = (outputLanguage: "zh-CN" | "en"): VerifyCheck => ({
+  id: "verify",
+  label: verifyLabel(outputLanguage),
+  status: "not_applicable",
+  detail: outputLanguage === "zh-CN" ? "一致性服务暂不可用" : "Consistency service unavailable",
+});
+
 /**
  * Runs the service verify gate for a `ready` artifact. Returns null when the
  * service is not configured; returns `unavailable` when the service cannot be
@@ -280,13 +287,23 @@ async function verifyArtifact(
         availableCapabilities: VERIFY_AVAILABLE_CAPABILITIES,
       }),
     });
-  } catch {
-    return { outcome: "unavailable", check: { id: "verify", label: verifyLabel(outputLanguage), status: "not_applicable", detail: outputLanguage === "zh-CN" ? "一致性服务暂不可用，已使用基础检查" : "Consistency service unavailable; basic checks used" } };
+  } catch (error) {
+    console.warn("[verify] service unreachable", error);
+    return { outcome: "unavailable", check: unavailableCheck(outputLanguage) };
   }
+  // A non-ok answer is an outage too: the service could not decide, so the
+  // artifact is no more verified than if the request had never arrived.
   if (!response.ok) {
-    return { outcome: "unavailable", check: { id: "verify", label: verifyLabel(outputLanguage), status: "not_applicable", detail: outputLanguage === "zh-CN" ? "一致性服务暂不可用，已使用基础检查" : "Consistency service unavailable; basic checks used" } };
+    console.warn("[verify] service answered", response.status, await response.text().catch(() => ""));
+    return { outcome: "unavailable", check: unavailableCheck(outputLanguage) };
   }
-  const payload = await response.json() as { ok?: boolean; capabilities?: { unsupported?: string[] }; diagnostics?: Array<{ code?: string }> };
+  const payload = await response.json() as {
+    ok?: boolean;
+    capabilities?: { unsupported?: string[] };
+    diagnostics?: Array<{ code?: string; message?: string }>;
+    compiled?: { ok?: boolean };
+    semantics?: { ok?: boolean; scenarioCount?: number; scenarioPassed?: number };
+  };
   const unsupported = payload.capabilities?.unsupported ?? [];
   if (unsupported.length > 0) {
     const labels = unsupported.map((capability) => capabilityLabel(capability, outputLanguage));
@@ -299,6 +316,17 @@ async function verifyArtifact(
   if (payload.ok === true) {
     return { outcome: "passed", check: { id: "verify", label: verifyLabel(outputLanguage), status: "passed", detail: outputLanguage === "zh-CN" ? "程序编译通过，契约核对与行为场景一致" : "Program compiles; contract matches with behavioral scenarios" } };
   }
+  // A rejection here refuses a strategy the customer asked for, so the reason
+  // has to land somewhere an operator can read it. The customer sees a stable
+  // code; without this the diagnostics that explain which rule or scenario
+  // disagreed are computed by the service and then dropped on the floor.
+  console.warn("[verify] gate rejected a ready artifact", JSON.stringify({
+    strategyName: artifact.strategyName,
+    compiled: payload.compiled?.ok,
+    semantics: payload.semantics?.ok,
+    scenarios: `${payload.semantics?.scenarioPassed ?? "?"}/${payload.semantics?.scenarioCount ?? "?"}`,
+    diagnostics: payload.diagnostics?.map((item) => `${item.code}: ${item.message}`) ?? [],
+  }));
   return { outcome: "failed", check: { id: "verify", label: verifyLabel(outputLanguage), status: "failed", detail: outputLanguage === "zh-CN" ? "程序与契约核对不一致" : "Program and contract are inconsistent" } };
 }
 

@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { describeApiFailure, type ApiErrorPayload } from "./api-error";
 import { getMessages } from "./i18n";
 import { localePath, type Locale } from "./i18n/locales";
 import { describeDecision, describeRules, timeframeLabel } from "./strategy-language";
@@ -97,8 +98,7 @@ export default function UnderstandingPanel({
       void sendFeedback("correct", feedbackNote);
       const response = await fetch(`/api/strategy/${strategyId}/confirm`, { method: "POST" });
       if (!response.ok) {
-        const payload = await response.json() as { code?: string };
-        throw new Error(payload.code === "AUTH_REQUIRED" ? errors.AUTH_REQUIRED : errors.INTERNAL_ERROR);
+        throw new Error(describeApiFailure(messages, await response.json() as ApiErrorPayload, errors.INTERNAL_ERROR));
       }
       router.push(backtestHref);
     } catch (caught) {
@@ -119,8 +119,8 @@ export default function UnderstandingPanel({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ intent: merged, asset, market, locale }),
       });
-      const payload = await response.json() as { id?: string; code?: string };
-      if (!response.ok || !payload.id) throw new Error(errors.ANALYZE_FAILED);
+      const payload = await response.json() as ApiErrorPayload & { id?: string };
+      if (!response.ok || !payload.id) throw new Error(describeApiFailure(messages, payload, errors.ANALYZE_FAILED));
       router.push(localePath(locale, `/s/${payload.id}/confirm`));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : errors.ANALYZE_FAILED);

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
+import { describeApiFailure, type ApiErrorPayload } from "./api-error";
 import BacktestChart, { type BacktestBar, type BacktestTrade, type EquityPoint } from "./backtest-chart";
 import { getMessages } from "./i18n";
 import { localePath, LOCALE_TAG, type Locale } from "./i18n/locales";
@@ -275,15 +276,8 @@ export default function BacktestWorkspace({
   const [adoptedVersion, setAdoptedVersion] = useState<AdoptedVersion | null>(null);
   const lastRequestKey = useRef("");
 
-  /** Renders an API failure in the reader's language, falling back to the code itself. */
-  function describeFailure(payload: { code?: string; params?: Record<string, string | number> }, fallback: string): string {
-    const entry = payload.code ? (messages.errors as Record<string, unknown>)[payload.code] : undefined;
-    if (typeof entry === "function") {
-      const values = payload.params ?? {};
-      return (entry as (a: string, b: string) => string)(String(values.timeframe ?? ""), String(values.maxBars ?? ""));
-    }
-    return typeof entry === "string" ? entry : fallback;
-  }
+  const describeFailure = (payload: ApiErrorPayload, fallback: string): string =>
+    describeApiFailure(messages, payload, fallback);
 
   function requestConfig() {
     return {
