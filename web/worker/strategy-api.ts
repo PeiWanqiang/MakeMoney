@@ -9,6 +9,8 @@ interface StrategyEnv {
   DEEPSEEK_API_KEY?: string;
   DEEPSEEK_BASE_URL?: string;
   DEEPSEEK_STRATEGY_MODEL?: string;
+  /** Overrides the per-generation token budget; see `strategyMaxTokens`. */
+  DEEPSEEK_MAX_TOKENS?: string;
   /**
    * When set, `ready` artifacts must pass the service's program↔contract verify
    * gate (`POST /v1/strategy/verify`) before they are persisted as runnable.
@@ -193,6 +195,23 @@ function ownershipClause(identity: Identity): { sql: string; bindings: string[] 
   return identity.user
     ? { sql: "(user_id = ? OR (user_id IS NULL AND session_id = ?))", bindings: [identity.user.id, identity.anonId] }
     : { sql: "(user_id IS NULL AND session_id = ?)", bindings: [identity.anonId] };
+}
+
+/**
+ * Token budget for one strategy generation.
+ *
+ * The strategy model reasons before answering and the budget covers the
+ * reasoning as well as the visible answer, so a long chain of thought can leave
+ * the JSON cut off mid-string. At 5000 that happened on a `ready` result, which
+ * carries a whole defineStrategy program inside a JSON string. 8000 is what the
+ * CLI provider (`src/studio/deepseek-provider.ts`) already uses against this
+ * same model for the same job, so it is the raise that is known to be accepted
+ * rather than a guess at the model's ceiling. The override exists because that
+ * ceiling depends on the deployed model and base URL, which are configurable.
+ */
+function strategyMaxTokens(env: StrategyEnv): number {
+  const configured = Number(env.DEEPSEEK_MAX_TOKENS);
+  return Number.isInteger(configured) && configured > 0 ? configured : 8_000;
 }
 
 function extractJson(text: string): Record<string, unknown> {
@@ -407,16 +426,41 @@ async function analyze(request: Request, env: StrategyEnv, identity: Identity): 
           },
         ],
         response_format: { type: "json_object" },
-        max_tokens: 5000,
+        max_tokens: strategyMaxTokens(env),
         stream: false,
       }),
     });
     if (!response.ok) return fail("MODEL_UNAVAILABLE", 502);
-    const completion = await response.json() as { id?: string; choices?: Array<{ message?: { content?: string } }>; usage?: unknown };
-    const content = completion.choices?.[0]?.message?.content;
+    const completion = await response.json() as {
+      id?: string;
+      choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
+      usage?: unknown;
+    };
+    const choice = completion.choices?.[0];
+    const content = choice?.message?.content;
     if (!content) return fail("EMPTY_MODEL_RESULT", 502);
-    artifact = extractJson(content);
-    validateArtifact(artifact);
+    // A truncated answer is not malformed model output, it is a budget we set
+    // too low. Saying so keeps it out of the generic 500 bucket and tells the
+    // customer that retrying is worthwhile.
+    if (choice?.finish_reason === "length") {
+      console.warn("[analyze] model answer hit the token budget", JSON.stringify({ model, characters: content.length }));
+      return fail("MODEL_RESPONSE_TRUNCATED", 502, undefined, 5);
+    }
+    // Malformed or incomplete model output is an upstream fault, not an
+    // internal one: it says nothing about this request that a 500 would let the
+    // customer act on, and the underlying parser message belongs in the log
+    // rather than in the generic error bucket.
+    try {
+      artifact = extractJson(content);
+      validateArtifact(artifact);
+    } catch (error) {
+      console.warn("[analyze] model answer could not be used", JSON.stringify({
+        model,
+        characters: content.length,
+        reason: error instanceof Error ? error.message : String(error),
+      }));
+      return fail("MODEL_RESPONSE_INVALID", 502, undefined, 5);
+    }
     enforceEntryConditionFloor(artifact, outputLanguage);
     responseId = completion.id ?? null;
     const now = new Date().toISOString();

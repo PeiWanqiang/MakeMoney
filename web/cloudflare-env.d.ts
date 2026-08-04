@@ -43,6 +43,7 @@ declare module "cloudflare:workers" {
     DEEPSEEK_API_KEY?: string;
     DEEPSEEK_BASE_URL?: string;
     DEEPSEEK_STRATEGY_MODEL?: string;
+    DEEPSEEK_MAX_TOKENS?: string;
     GOOGLE_CLIENT_ID?: string;
     GOOGLE_CLIENT_SECRET?: string;
   };

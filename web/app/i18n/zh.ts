@@ -499,6 +499,8 @@ export const zh = {
     SERVICE_NOT_CONFIGURED: "策略服务尚未配置，请稍后再试",
     MODEL_UNAVAILABLE: "模型服务暂时不可用，请稍后重试",
     EMPTY_MODEL_RESULT: "模型没有返回策略结果",
+    MODEL_RESPONSE_TRUNCATED: "模型这次的回答被长度截断了，请再试一次；若反复出现，请把策略描述写得更简短一些",
+    MODEL_RESPONSE_INVALID: "模型这次返回的策略结果不完整，请再试一次",
     INTERNAL_ERROR: "服务发生未知错误，请稍后重试",
     AUTH_REQUIRED: "这一步需要先登录",
     NOT_FOUND: "没有找到这条策略",

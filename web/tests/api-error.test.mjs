@@ -39,6 +39,7 @@ test("both catalogues carry a message for every blocking API code", () => {
     "ANALYZE_FAILED", "BACKTEST_FAILED", "COMPILE_FAILED", "SOURCE_MISSING", "BACKTEST_SERVICE_ERROR",
     "NOT_RUNNABLE", "NOT_CONFIRMED", "STRATEGY_VERIFY_FAILED", "STRATEGY_VERIFY_UNAVAILABLE",
     "RATE_LIMITED", "AUTH_REQUIRED", "INTERNAL_ERROR", "MODEL_UNAVAILABLE", "EMPTY_MODEL_RESULT",
+    "MODEL_RESPONSE_TRUNCATED", "MODEL_RESPONSE_INVALID",
   ];
   for (const code of required) {
     assert.ok(zh.errors[code], `zh is missing a message for ${code}`);

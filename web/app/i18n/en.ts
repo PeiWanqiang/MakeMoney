@@ -501,6 +501,8 @@ export const en: Messages = {
     SERVICE_NOT_CONFIGURED: "The strategy service is not configured yet",
     MODEL_UNAVAILABLE: "The model service is temporarily unavailable. Please retry.",
     EMPTY_MODEL_RESULT: "The model returned no strategy result",
+    MODEL_RESPONSE_TRUNCATED: "The model's answer was cut off by length. Please try again; if it keeps happening, describe the strategy more briefly.",
+    MODEL_RESPONSE_INVALID: "The model returned an incomplete strategy result. Please try again.",
     INTERNAL_ERROR: "An unexpected server error occurred. Please retry.",
     AUTH_REQUIRED: "This step needs you to sign in",
     NOT_FOUND: "That strategy does not exist",

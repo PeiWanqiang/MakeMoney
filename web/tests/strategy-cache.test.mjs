@@ -82,6 +82,44 @@ test("reuses a validated strategy artifact without a second model request", asyn
   }
 });
 
+// The strategy model reasons before answering and the token budget covers both,
+// so a long enough chain of thought leaves the JSON cut off mid-string. That
+// used to reach JSON.parse and surface as an opaque 500 saying nothing the
+// customer could act on.
+test("reports a truncated model answer as a retryable code, not an internal error", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    assert.ok(!String(url).includes("/v1/strategy/verify"), "a truncated answer must not reach the verify gate");
+    assert.equal(JSON.parse(init.body).max_tokens, 8_000);
+    return Response.json({
+      id: "deepseek-3",
+      choices: [{ message: { content: '{"status":"ready","strategyName":"截断' }, finish_reason: "length" }],
+    });
+  };
+  try {
+    const workerUrl = new URL(`../dist/server/index.js?truncated=${Date.now()}`, import.meta.url);
+    const { default: worker } = await import(workerUrl.href);
+    const state = { cache: new Map(), submissions: [] };
+    const DB = { prepare(sql) { return new Statement(sql, state); }, async batch() { return []; } };
+    const response = await worker.fetch(
+      new Request("http://localhost/api/strategy/analyze", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ intent: "EMA20 上穿 EMA60 做多，止损5%，下穿平仓", asset: "BTCUSDT", market: "Binance Perpetual" }),
+      }),
+      { DB, DEEPSEEK_API_KEY: "test", BACKTEST_SERVICE_URL: "http://127.0.0.1:9" },
+      {},
+    );
+    const body = await response.json();
+    assert.equal(response.status, 502, JSON.stringify(body));
+    assert.equal(body.code, "MODEL_RESPONSE_TRUNCATED");
+    assert.equal(state.submissions.length, 0);
+    assert.equal(state.cache.size, 0, "a truncated answer must not be cached");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 // The service is the only engine that runs a strategy, so an artifact it never
 // verified can never become runnable. Persisting one anyway is what let a
 // program the compiler rejects reach a confirmed strategy whose every backtest
