@@ -146,38 +146,43 @@ export async function runBacktest(
   };
 
   try {
+    const evaluationStartTime = config.evaluationStartTime ?? bars[0]!.timestamp;
+    let windowBarCount = 0;
     for (let index = 0; index < bars.length; index += 1) {
       const bar = bars[index];
       if (!bar) continue;
+      const inWindow = bar.timestamp >= evaluationStartTime;
 
-      if (pendingDecision?.type === "open" && !position) {
-        const fillSide = pendingDecision.side === "long" ? "buy" : "sell";
-        const entryPrice = withSlippage(bar.open, fillSide, config.slippageBps);
-        const quantity = positionQuantity(pendingDecision, entryPrice, cash, config.maxLeverage);
-        const entryFee = entryPrice * quantity * config.takerFeeRate;
-        cash -= entryFee;
-        const direction = pendingDecision.side === "long" ? 1 : -1;
-        const stopDistance = entryPrice * pendingDecision.stopLossPercent;
-        position = {
-          side: pendingDecision.side,
-          quantity,
-          entryPrice,
-          entryTimestamp: bar.timestamp,
-          entryFee,
-          entrySlippageCost: Math.abs(entryPrice - bar.open) * quantity,
-          fundingPnl: 0,
-          stopPrice: entryPrice - direction * stopDistance,
-          takeProfitPrice:
-            pendingDecision.takeProfitRiskReward === undefined
-              ? null
-              : entryPrice + direction * stopDistance * pendingDecision.takeProfitRiskReward,
-        };
-      } else if (pendingDecision?.type === "close" && position) {
-        closePosition(bar, bar.open, pendingDecision.reason ?? "strategy");
+      if (inWindow) {
+        if (pendingDecision?.type === "open" && !position) {
+          const fillSide = pendingDecision.side === "long" ? "buy" : "sell";
+          const entryPrice = withSlippage(bar.open, fillSide, config.slippageBps);
+          const quantity = positionQuantity(pendingDecision, entryPrice, cash, config.maxLeverage);
+          const entryFee = entryPrice * quantity * config.takerFeeRate;
+          cash -= entryFee;
+          const direction = pendingDecision.side === "long" ? 1 : -1;
+          const stopDistance = entryPrice * pendingDecision.stopLossPercent;
+          position = {
+            side: pendingDecision.side,
+            quantity,
+            entryPrice,
+            entryTimestamp: bar.timestamp,
+            entryFee,
+            entrySlippageCost: Math.abs(entryPrice - bar.open) * quantity,
+            fundingPnl: 0,
+            stopPrice: entryPrice - direction * stopDistance,
+            takeProfitPrice:
+              pendingDecision.takeProfitRiskReward === undefined
+                ? null
+                : entryPrice + direction * stopDistance * pendingDecision.takeProfitRiskReward,
+          };
+        } else if (pendingDecision?.type === "close" && position) {
+          closePosition(bar, bar.open, pendingDecision.reason ?? "strategy");
+        }
       }
       pendingDecision = null;
 
-      if (position) {
+      if (inWindow && position) {
         const notional = position.quantity * (bar.markPrice ?? bar.close);
         const direction = position.side === "long" ? 1 : -1;
         const fundingPnl = -direction * notional * (bar.fundingRate ?? 0);
@@ -200,7 +205,10 @@ export async function runBacktest(
       const markPrice = bar.markPrice ?? bar.close;
       const currentPosition = runtimePosition(position, markPrice);
       const equity = cash + currentPosition.unrealizedPnl;
-      equityCurve.push({ timestamp: bar.timestamp, equity });
+      if (inWindow) {
+        equityCurve.push({ timestamp: bar.timestamp, equity });
+        windowBarCount += 1;
+      }
 
       const newlyClosedTimeframes: Partial<Record<StrategyTimeframe, MarketBar[]>> = {};
       if (timeframeContext) {
@@ -221,7 +229,10 @@ export async function runBacktest(
       const invocation = await sandbox.runBar(bar, currentPosition, equity, state, newlyClosedTimeframes);
       strategyMetadata ??= invocation.strategy;
       state = invocation.state;
-      pendingDecision = invocation.decision;
+      pendingDecision = inWindow ? invocation.decision : null;
+    }
+    if (windowBarCount < 2) {
+      throw new Error("Performance window requires at least two market bars.");
     }
   } finally {
     sandbox.dispose();

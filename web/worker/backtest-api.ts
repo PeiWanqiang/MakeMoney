@@ -248,7 +248,10 @@ const KLINE_CACHE_VERSION = "klines-v1";
 // for a new-engine run of the same logical request.
 const BACKTEST_CACHE_VERSION = "backtest-v5-engine-service";
 const SERVICE_ENGINE_VERSION = "cli-sandbox-0.1.0";
-const OPTIMIZATION_CACHE_VERSION = "optimization-v3-aligned-window";
+// Bumped when optimization moved to the service: the experiment id derives from
+// this key, and the blind test is one-shot per id, so an old-engine experiment
+// must never be served to a new-engine request.
+const OPTIMIZATION_CACHE_VERSION = "optimization-v4-engine-service";
 const MAX_OPTIMIZATION_PARAMETERS = 4;
 const MAX_OPTIMIZATION_TRIALS = 16;
 const MARKET_FIELDS = new Set(["open", "high", "low", "close", "volume"]);
@@ -1539,6 +1542,120 @@ function shadowCompare(legacy: BacktestCoreResult, service: BacktestCoreResult, 
   }));
 }
 
+function engineConfig(config: BacktestConfig) {
+  return {
+    initialCapital: config.initialCapital,
+    takerFeeRate: config.takerFeeRate,
+    slippageBps: config.slippageBps,
+    maxLeverage: config.maxLeverage,
+  };
+}
+
+/** Runs the parameter lab on the Node service; the service does pure computation only. */
+async function runOptimizationOnService(
+  env: BacktestEnv,
+  input: {
+    source: string;
+    contract: StrategyContract;
+    selections: ParameterSelection[];
+    objective: OptimizationCoreResult["objective"];
+    maximumTrials: number;
+    bars: Bar[];
+    config: BacktestConfig;
+  },
+): Promise<OptimizationCoreResult> {
+  const baseUrl = env.BACKTEST_SERVICE_URL!.replace(/\/+$/, "");
+  const response = await fetch(`${baseUrl}/v1/optimization/run`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      schemaVersion: "optimization-1.0",
+      source: input.source,
+      contract: input.contract,
+      selections: input.selections,
+      objective: input.objective,
+      maximumTrials: input.maximumTrials,
+      bars: input.bars,
+      config: engineConfig(input.config),
+    }),
+  });
+  const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
+  if (!response.ok) {
+    const code = typeof payload?.code === "string" ? payload.code : "OPTIMIZATION_SERVICE_ERROR";
+    throw new CodedError(code, { message: typeof payload?.message === "string" ? payload.message : "优化服务执行失败" });
+  }
+  if (!payload || typeof payload.result !== "object") {
+    throw new CodedError("OPTIMIZATION_SERVICE_ERROR", { message: "优化服务返回格式无效" });
+  }
+  return payload.result as OptimizationCoreResult;
+}
+
+/** Runs the one-shot final blind test on the Node service. */
+async function runBlindOnService(
+  env: BacktestEnv,
+  input: {
+    source: string;
+    contract: StrategyContract;
+    candidateParameters: Record<string, number>;
+    bars: Bar[];
+    config: BacktestConfig;
+    blindStartTime: number;
+  },
+): Promise<{ passed: boolean; baseline: OptimizationMetrics; candidate: OptimizationMetrics; checks: Array<{ id: string; label: string; passed: boolean; detail: string }> }> {
+  const baseUrl = env.BACKTEST_SERVICE_URL!.replace(/\/+$/, "");
+  const response = await fetch(`${baseUrl}/v1/optimization/blind`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      schemaVersion: "blind-1.0",
+      source: input.source,
+      contract: input.contract,
+      candidateParameters: input.candidateParameters,
+      bars: input.bars,
+      config: engineConfig(input.config),
+      blindStartTime: input.blindStartTime,
+    }),
+  });
+  const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
+  if (!response.ok) {
+    const code = typeof payload?.code === "string" ? payload.code : "BLIND_SERVICE_ERROR";
+    throw new CodedError(code, { message: typeof payload?.message === "string" ? payload.message : "盲测服务执行失败" });
+  }
+  if (!payload || typeof payload.outcome !== "object") {
+    throw new CodedError("BLIND_SERVICE_ERROR", { message: "盲测服务返回格式无效" });
+  }
+  return payload.outcome as { passed: boolean; baseline: OptimizationMetrics; candidate: OptimizationMetrics; checks: Array<{ id: string; label: string; passed: boolean; detail: string }> };
+}
+
+/** Materializes the parameter version's real program on the Node service. */
+async function materializeSourceOnService(
+  env: BacktestEnv,
+  source: string,
+  contract: StrategyContract,
+  parameters: Record<string, number>,
+): Promise<string> {
+  const baseUrl = env.BACKTEST_SERVICE_URL!.replace(/\/+$/, "");
+  const response = await fetch(`${baseUrl}/v1/optimization/materialize`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      schemaVersion: "materialize-1.0",
+      source,
+      contract,
+      parameters,
+    }),
+  });
+  const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
+  if (!response.ok) {
+    const code = typeof payload?.code === "string" ? payload.code : "MATERIALIZE_SERVICE_ERROR";
+    throw new CodedError(code, { message: typeof payload?.message === "string" ? payload.message : "参数程序物化失败" });
+  }
+  if (!payload || typeof payload.source !== "string") {
+    throw new CodedError("MATERIALIZE_SERVICE_ERROR", { message: "物化服务返回格式无效" });
+  }
+  return payload.source;
+}
+
 const HOT_BACKTEST_RESULTS = new HotPromiseCache<{ result: BacktestCoreResult; tier: "object" | "computed" }>(16);
 const HOT_OPTIMIZATION_RESULTS = new HotPromiseCache<{ result: OptimizationCoreResult; tier: "object" | "computed" }>(8);
 
@@ -1975,6 +2092,10 @@ async function runOptimization(request: Request, env: BacktestEnv, identity: Ide
   const contract = validateContract(strategy.contract);
   const definitions = extractParameterSchema(contract);
   if (definitions.length === 0) return json({ error: "这份策略没有可安全调整的数字参数" }, 409);
+  const usingService = Boolean(env.BACKTEST_SERVICE_URL);
+  const source = typeof strategy.source === "string" ? strategy.source : "";
+  if (usingService && source === "") return fail("SOURCE_MISSING", 422);
+  if (usingService) assertServiceSupported(source);
   const selections = parseSelections(body.parameters, definitions);
   const objective: OptimizationCoreResult["objective"] = body.objective === "return" || body.objective === "drawdown" ? body.objective : "balanced";
   const maximumTrials = Math.round(finite(body.maxTrials, 12, 6, MAX_OPTIMIZATION_TRIALS));
@@ -2006,8 +2127,10 @@ async function runOptimization(request: Request, env: BacktestEnv, identity: Ide
   const barsDigest = await sha256Text(JSON.stringify(compactBars(bars)));
   const semanticLockHash = await sha256Text(semanticSkeleton(contract));
   const candidates = generateParameterCandidates(definitions, selections, maximumTrials);
+  const sourceHash = await sha256Text(source);
   const cacheKey = await sha256Text(JSON.stringify({
     version: OPTIMIZATION_CACHE_VERSION,
+    engine: usingService ? "cli-sandbox-service" : "proof-worker-contract",
     contract,
     semanticLockHash,
     selections,
@@ -2015,6 +2138,7 @@ async function runOptimization(request: Request, env: BacktestEnv, identity: Ide
     maximumTrials,
     config,
     barsDigest,
+    sourceHash,
   }));
   const id = await sha256Text(JSON.stringify({ version: OPTIMIZATION_CACHE_VERSION, sessionId, strategyId, cacheKey }));
   const existing = await env.DB.prepare(`SELECT result_json, blind_status, blind_result_json, adopted_strategy_id
@@ -2029,40 +2153,30 @@ async function runOptimization(request: Request, env: BacktestEnv, identity: Ide
   });
   const objectKey = `${OPTIMIZATION_CACHE_VERSION}/results/${cacheKey}.json.gz`;
   const wasHot = HOT_OPTIMIZATION_RESULTS.has(objectKey);
-  const cached = await HOT_OPTIMIZATION_RESULTS.getOrLoad(objectKey, async () => {
-    const storedResult = await readObjectJson<OptimizationCoreResult>(env.CACHE, objectKey);
-    if (storedResult) return { result: storedResult, tier: "object" as const };
-    const evaluated = (() => {
-      const trials = candidates.map((parameters, index): OptimizationTrial => {
-        const candidateContract = applyParameters(contract, definitions, parameters);
-        const train = compactOptimizationMetrics(runContractBacktest(candidateContract, trainBars, config));
-        const validation = compactOptimizationMetrics(runEvaluationWindow(candidateContract, developmentBars, splitIndex, developmentBars.length, config));
-        return {
-          id: `T${String(index + 1).padStart(2, "0")}`,
-          parameters,
-          train,
-          validation,
-          score: optimizationScore(train, validation, objective),
-          pareto: false,
-          isBaseline: index === 0,
-        };
-      });
-      markPareto(trials);
-      const baseline = trials[0]!;
-      const ranked = [...trials].sort((left, right) => right.score - left.score);
-      const challenger = ranked.find((trial) => !trial.isBaseline && trial.validation.tradeCount >= 2);
-      const improved = Boolean(challenger && challenger.score > baseline.score + 0.005);
-      const recommended = improved ? challenger! : baseline;
+  // Local fallback (legacy contract interpreter) when the service is unconfigured.
+  const computeOptimizationLocally = async (): Promise<OptimizationCoreResult> => {
+    const trials = candidates.map((parameters, index): OptimizationTrial => {
+      const candidateContract = applyParameters(contract, definitions, parameters);
+      const train = compactOptimizationMetrics(runContractBacktest(candidateContract, trainBars, config));
+      const validation = compactOptimizationMetrics(runEvaluationWindow(candidateContract, developmentBars, splitIndex, developmentBars.length, config));
       return {
-        trials,
-        improved,
-        baselineTrialId: baseline.id,
-        recommendedTrialId: recommended.id,
-        robustness: buildRobustnessGate(contract, recommended.parameters, definitions, selections, developmentBars, splitIndex, config, objective, trials.length, improved),
+        id: `T${String(index + 1).padStart(2, "0")}`,
+        parameters,
+        train,
+        validation,
+        score: optimizationScore(train, validation, objective),
+        pareto: false,
+        isBaseline: index === 0,
       };
-    })();
-    const { trials, improved, baselineTrialId, recommendedTrialId, robustness } = evaluated;
-    const result: OptimizationCoreResult = {
+    });
+    markPareto(trials);
+    const baseline = trials[0]!;
+    const ranked = [...trials].sort((left, right) => right.score - left.score);
+    const challenger = ranked.find((trial) => !trial.isBaseline && trial.validation.tradeCount >= 2);
+    const improved = Boolean(challenger && challenger.score > baseline.score + 0.005);
+    const recommended = improved ? challenger! : baseline;
+    const robustness = buildRobustnessGate(contract, recommended.parameters, definitions, selections, developmentBars, splitIndex, config, objective, trials.length, improved);
+    return {
       schemaVersion: "optimization-2.0",
       semanticLockHash,
       split: {
@@ -2078,11 +2192,18 @@ async function runOptimization(request: Request, env: BacktestEnv, identity: Ide
       },
       objective,
       trials,
-      baselineTrialId,
-      recommendedTrialId,
+      baselineTrialId: baseline.id,
+      recommendedTrialId: recommended.id,
       outcome: improved ? "improved" : "baseline_retained",
       robustness,
     };
+  };
+  const cached = await HOT_OPTIMIZATION_RESULTS.getOrLoad(objectKey, async () => {
+    const storedResult = await readObjectJson<OptimizationCoreResult>(env.CACHE, objectKey);
+    if (storedResult) return { result: storedResult, tier: "object" as const };
+    const result = usingService
+      ? await runOptimizationOnService(env, { source, contract, selections, objective, maximumTrials, bars, config })
+      : await computeOptimizationLocally();
     await writeObjectJson(env.CACHE, objectKey, result);
     return { result, tier: "computed" as const };
   });
@@ -2094,7 +2215,7 @@ async function runOptimization(request: Request, env: BacktestEnv, identity: Ide
     asset: stored.asset,
     market: stored.market,
     timeframe: contract.timeframe,
-    engineVersion: "proof-worker-0.5.0",
+    engineVersion: usingService ? SERVICE_ENGINE_VERSION : "proof-worker-0.5.0",
     durationMs: Date.now() - started,
     dataSource: fetched.dataSource,
     dataWarnings: fetched.warnings,
@@ -2177,14 +2298,34 @@ async function revealBlindTest(request: Request, env: BacktestEnv, identity: Ide
     const digest = await sha256Text(JSON.stringify(compactBars(bars)));
     if (digest !== config.barsDigest) throw new Error("历史数据快照已变化；为保护盲测，实验已停止且不会混用新数据");
     const blindStart = new Date(experiment.split.blindStart).getTime();
-    const candidateContract = applyParameters(contract, definitions, recommended.parameters);
-    const baselineResult = compactOptimizationMetrics(runContractBacktest(contract, bars, config, { evaluationStartTime: blindStart }));
-    const candidateResult = compactOptimizationMetrics(runContractBacktest(candidateContract, bars, config, { evaluationStartTime: blindStart }));
-    const checks = [
-      { id: "minimumTrades", label: "盲测交易样本", passed: candidateResult.tradeCount >= 2, detail: `${candidateResult.tradeCount} 笔，门槛为 2 笔` },
-      { id: "relativeReturn", label: "相对收益没有坍塌", passed: candidateResult.netReturn >= baselineResult.netReturn - 0.01, detail: `候选 ${candidateResult.netReturn.toFixed(4)} / 原始 ${baselineResult.netReturn.toFixed(4)}` },
-      { id: "relativeDrawdown", label: "相对回撤没有恶化", passed: candidateResult.maximumDrawdown >= baselineResult.maximumDrawdown - 0.03, detail: `候选 ${candidateResult.maximumDrawdown.toFixed(4)} / 原始 ${baselineResult.maximumDrawdown.toFixed(4)}` },
-    ];
+    const usingService = Boolean(env.BACKTEST_SERVICE_URL);
+    const source = typeof strategy.source === "string" ? strategy.source : "";
+    if (usingService && source === "") throw new Error("原始策略没有程序源码，盲测不能继续");
+    let baselineResult: OptimizationMetrics;
+    let candidateResult: OptimizationMetrics;
+    let checks: Array<{ id: string; label: string; passed: boolean; detail: string }>;
+    if (usingService) {
+      const outcome = await runBlindOnService(env, {
+        source,
+        contract,
+        candidateParameters: recommended.parameters,
+        bars,
+        config,
+        blindStartTime: blindStart,
+      });
+      baselineResult = outcome.baseline;
+      candidateResult = outcome.candidate;
+      checks = outcome.checks;
+    } else {
+      const candidateContract = applyParameters(contract, definitions, recommended.parameters);
+      baselineResult = compactOptimizationMetrics(runContractBacktest(contract, bars, config, { evaluationStartTime: blindStart }));
+      candidateResult = compactOptimizationMetrics(runContractBacktest(candidateContract, bars, config, { evaluationStartTime: blindStart }));
+      checks = [
+        { id: "minimumTrades", label: "盲测交易样本", passed: candidateResult.tradeCount >= 2, detail: `${candidateResult.tradeCount} 笔，门槛为 2 笔` },
+        { id: "relativeReturn", label: "相对收益没有坍塌", passed: candidateResult.netReturn >= baselineResult.netReturn - 0.01, detail: `候选 ${candidateResult.netReturn.toFixed(4)} / 原始 ${baselineResult.netReturn.toFixed(4)}` },
+        { id: "relativeDrawdown", label: "相对回撤没有恶化", passed: candidateResult.maximumDrawdown >= baselineResult.maximumDrawdown - 0.03, detail: `候选 ${candidateResult.maximumDrawdown.toFixed(4)} / 原始 ${baselineResult.maximumDrawdown.toFixed(4)}` },
+      ];
+    }
     const passed = checks.every((check) => check.passed);
     const consumedAt = new Date().toISOString();
     const blindResult = {
@@ -2237,6 +2378,14 @@ async function createOptimizedVersion(request: Request, env: BacktestEnv, identi
   const candidateContract = applyParameters(contract, definitions, recommended.parameters);
   const semanticLockHash = await sha256Text(semanticSkeleton(candidateContract));
   if (semanticLockHash !== experiment.semanticLockHash) throw new Error("候选策略未通过语义锁复核");
+  // Materialize the real program for the parameter version so the single engine
+  // can execute it. The legacy path (no service) keeps an empty source flagged
+  // as contract-derived.
+  const usingService = Boolean(env.BACKTEST_SERVICE_URL);
+  const baseSource = typeof strategy.source === "string" ? strategy.source : "";
+  const candidateSource = usingService
+    ? await materializeSourceOnService(env, baseSource, contract, recommended.parameters)
+    : "";
   const id = crypto.randomUUID();
   const changes = experiment.parameterSchema.map((parameter) => ({
     id: parameter.id,
@@ -2252,8 +2401,8 @@ async function createOptimizedVersion(request: Request, env: BacktestEnv, identi
     strategyName,
     summary: `基于已锁定策略语义创建的参数版本；通过滚动验证、邻域敏感性、成本压力和一次性最终盲测。`,
     contract: candidateContract,
-    source: "",
-    programStatus: "contract-derived",
+    source: candidateSource,
+    programStatus: candidateSource === "" ? "contract-derived" : "program-derived",
     parentStrategyId: storedRun.strategy_submission_id,
     optimizationId,
     semanticLockHash,

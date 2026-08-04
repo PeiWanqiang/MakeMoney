@@ -71,6 +71,13 @@ export interface BacktestConfig {
   takerFeeRate: number;
   slippageBps: number;
   maxLeverage: number;
+  /**
+   * Performance-window start. Bars before this timestamp feed the sandbox so
+   * indicators warm up, but the strategy's decisions are discarded and nothing
+   * is traded or measured before it. Used by the parameter lab to evaluate a
+   * validation/blind window against fully warmed-up indicators.
+   */
+  evaluationStartTime?: number;
 }
 
 export interface ClosedTrade {

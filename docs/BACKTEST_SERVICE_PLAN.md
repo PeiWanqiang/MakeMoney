@@ -77,9 +77,15 @@
 - [x] `enforceEntryConditionFloor` 保留（补充性，不是主门禁）。
 - [x] 服务不可达时 verify 检查标记 `not_applicable` 并回落 substring `structuralChecks`，analyze 不被基础设施拖死。
 
-### Phase 3 — 优化迁移（3–5 天）
-- 把 `extractParameterSchema` / `applyParameters` / `walkForwardEvidence` / `sensitivityEvidence` / `costStressEvidence` / `regimeEvidence` / 盲测从 `web/worker/backtest-api.ts` 移植为 `src/optimization/`，执行从 `runContractBacktest` 换成 `runBacktest`（真实程序）。
-- Web 端 `optimization/run|blind|adopt` 代理到服务。D1 仍是状态机持有方：服务只做纯计算并返回收据，Web 负责 `blind_status` 原子领取与落库。
+### Phase 3 — 优化迁移（已交付 2026-08-04）
+- [x] `src/optimization/`：参数发现/应用（`parameter-discovery.ts`，契约 canonical、id 与 Web 完全一致）、候选生成、试次评估、walk-forward / 敏感性 / 成本压力 / 市场状态 / 多次选择惩罚门禁（`optimization.ts`）、一次性盲测纯计算（`blind-test.ts`）。
+- [x] **执行切换为真实程序**：引擎 `runBacktest` 新增 `evaluationStartTime`（绩效窗口分离：窗口前历史喂指标 warm-up，窗口前不交易/不记权益），golden 测试钉死。
+- [x] **参数应用到程序**：`program-apply.ts` 按 canonical rule/condition 匹配把契约相对参数定位到程序 AST 的数值字面量并改写源码（覆盖 hoisted 指标变量、decision 字段、threshold），基线与候选都是同一程序家族，只差被调的数值；`applyParametersToSource` 经 golden 策略验证。
+- [x] 服务 `POST /v1/optimization/run` / `/v1/optimization/blind` / `/v1/optimization/materialize`；Web `optimization/run|blind` 代理到服务，`adopt` 仍在 Web。
+- [x] **参数版源码物化**：adopt 经服务 `/v1/optimization/materialize` 生成真实程序源码（`programStatus: program-derived`），解决此前"空白源码"缺口。
+- [x] D1 仍是盲测状态机持有方：`blind_status` reserved→running→passed/failed 原子领取与落库留在 Web；服务只做纯计算并返回收据。
+- [x] 缓存键加入 `engine`+`sourceHash` 并升版 `optimization-v4-engine-service`；experiment id 派生自新 key，避免新旧引擎盲测串号。
+- 性能说明：试次全部在服务端跑真实沙箱，12 试次约 30–50 次内层回测，量级秒到十秒级；异步任务队列留到 Phase 4。
 
 ### Phase 4 — 性能与异步（3–5 天）
 - 指标序列在试次循环外只算一次（现 Web 每次试次重建 `IndicatorEngine`，50 次全量重算）。

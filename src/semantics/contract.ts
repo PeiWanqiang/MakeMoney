@@ -64,7 +64,7 @@ export function canonicalDecision(decision: ContractDecision): string {
   });
 }
 
-function compactCondition(value: string): string {
+export function compactCondition(value: string): string {
   let result = "";
   let quoted = false;
   let escaped = false;

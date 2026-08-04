@@ -1,7 +1,7 @@
 # 项目状态与后续工作
 
 最后更新：2026-08-04
-当前阶段：Backtest Service 迁移 Phase 1（服务骨架 + 回测代理）与 Phase 2（语义准入门禁）已交付
+当前阶段：Backtest Service 迁移 Phase 1（服务骨架 + 回测代理）、Phase 2（语义准入门禁）、Phase 3（优化迁移）已交付
 状态口径：只有“代码存在、自动测试通过、真实数据或端到端样例验证”才记为已实现；只有文档方案的不记为产品已完成。
 
 项目级变更口径：所有新能力和问题修复必须遵循[泛化优先准入规范](GENERALIZATION_POLICY.md)。单一样例通过不能记为已实现；至少还需参数变体、结构变体、边界/拒绝和语义一致性证据。
@@ -238,7 +238,7 @@ Funding 策略的负结果是有效验证结果，不应为得到正收益而修
 - [x] 最后 20% 历史在预门禁通过前保持封存；相同会话/策略/参数/数据/配置映射到同一确定性实验 ID，原子状态保证只执行一次，后续请求复用同一不可变收据。
 - [x] 盲测通过后由用户确认创建一个不可变 `contract-derived` 参数版本，保留父版本、实验、语义锁和参数差异；重复请求不重复创建。
 - [ ] Stage 3：AI 只读实验设计与结果解释；AI 不负责数值执行，也不能修改历史结果。
-- [ ] 参数版 TypeScript 程序源码物化尚未实现；Web 当前以服务端机器契约为执行真相，不能把空白源码宣称为完整 SDK 源码版本。
+- [x] 参数版 TypeScript 程序源码物化已在服务路径实现（`/v1/optimization/materialize` + `program-apply.ts`）；adopt 生成的版本带真实程序源码（`programStatus: program-derived`）。旧路径（未配置服务）仍回退为空源码的 contract-derived 版本。
 - [ ] 异步任务队列、用户级并发与成本配额、取消和进度持久化尚未完成。
 
 ### 2.10 数据字段扩展 + Backtest Service 迁移 Phase 0（2026-08-04）
@@ -259,6 +259,16 @@ Funding 策略的负结果是有效验证结果，不应为得到正收益而修
 - [x] 根测试新增 15 项：服务 `/v1/backtest`（含 equityPercent + funding）与 `/v1/strategy/verify`（通过 / 能力缺口 / 规则错配 / 编译失败）、能力扫描 6 组；`npm test` 19 文件 86 项全部通过，`npm run typecheck` 通过，web 包 `tsc --noEmit` 通过。
 - [ ] Web 引擎删除（`IndicatorEngine`/`runContractBacktest`/正则条件解释）留到 Phase 5；优化路径（`/api/optimization/*`）仍在旧引擎，Phase 3 迁移。
 - [ ] 生产 Web→服务认证（共享 secret / mTLS + 请求签名）与服务部署（Cloud Run / Fargate）未做；本地 `node --test` Web 套件需 `npm run build` 后由用户复跑。
+
+### 2.12 Backtest Service 迁移 Phase 3：优化迁移（2026-08-04）
+
+- [x] 引擎 `runBacktest` 支持 `evaluationStartTime` 绩效窗口分离：窗口前历史喂指标 warm-up，窗口前不交易/不记权益/不计数；golden 测试钉死（`test/backtest-window.test.ts`）。
+- [x] `src/optimization/`：参数发现/应用（id 与 Web 完全一致）、候选生成、试次评估、walk-forward / 敏感性 / 成本压力 / 市场状态 / 多次选择惩罚门禁、盲测纯计算；全部执行真实程序。
+- [x] `src/optimization/program-apply.ts`：把契约相对参数（`rule.N.when.M.number.K`、`rule.N.decision.*`）按 canonical rule/condition 匹配定位到程序 AST 的数值字面量并改写源码；hoisted 指标变量、decision 字段、threshold、state 策略均有测试（`test/optimization-apply.test.ts` 6 项）。
+- [x] 服务 `POST /v1/optimization/run|blind|materialize`；Web `/api/optimization/run|blind` 在 `BACKTEST_SERVICE_URL` 设置时代理到服务；adopt 仍在 Web，D1 `blind_status` 原子状态机不变。
+- [x] 参数版源码物化：adopt 经 `/v1/optimization/materialize` 生成真实程序（`programStatus: program-derived`），关闭"参数版空白源码"缺口。
+- [x] 缓存键含 `engine`+`sourceHash`，`optimization-v4-engine-service`；`npm test` 23 文件 102 项全部通过，根/web typecheck 通过，服务 tsx 可加载。
+- [ ] 试次异步化、取消与进度持久化留到 Phase 4；生产部署与认证仍待做；本地 web `node --test` 套件需 `npm run build` 后由用户复跑。
 
 ## 3. 已实现但尚未完成验证
 

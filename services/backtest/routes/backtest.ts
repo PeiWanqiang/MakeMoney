@@ -7,17 +7,12 @@ import {
   BACKTEST_CONTRACT_VERSION,
   type BacktestServiceRequest,
   type BacktestServiceResponse,
-  type ServiceBar,
   type ServiceTimeframeContext,
 } from "../../../src/contracts/index.js";
-import type { MarketBar } from "../../../src/core/types.js";
 import { runBacktest, type BacktestTimeframeContext } from "../../../src/runtime/backtest.js";
 import { calculateBacktestMetrics } from "../../../src/runtime/backtest-metrics.js";
 import { CodedServiceError } from "../lib/errors.js";
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
+import { isFiniteNumber, serviceBarsToMarketBars } from "../lib/bars.js";
 
 function validateRequest(body: BacktestServiceRequest): void {
   if (!body || typeof body.source !== "string" || !Array.isArray(body.bars)) {
@@ -38,23 +33,6 @@ function validateRequest(body: BacktestServiceRequest): void {
       throw new CodedServiceError("BAD_REQUEST", `bars[${index}] is missing a required OHLCV field.`, 400);
     }
   }
-}
-
-function serviceBarsToMarketBars(bars: ServiceBar[]): MarketBar[] {
-  return bars.map((bar) => ({
-    timestamp: bar.timestamp,
-    open: bar.open,
-    high: bar.high,
-    low: bar.low,
-    close: bar.close,
-    volume: bar.volume,
-    ...(bar.markPrice !== undefined ? { markPrice: bar.markPrice } : {}),
-    ...(bar.fundingRate !== undefined ? { fundingRate: bar.fundingRate } : {}),
-    ...(bar.openInterest !== undefined ? { openInterest: bar.openInterest } : {}),
-    ...(bar.quoteVolume !== undefined ? { quoteVolume: bar.quoteVolume } : {}),
-    ...(bar.takerBuyBaseVolume !== undefined ? { takerBuyBaseVolume: bar.takerBuyBaseVolume } : {}),
-    ...(bar.takerBuyQuoteVolume !== undefined ? { takerBuyQuoteVolume: bar.takerBuyQuoteVolume } : {}),
-  }));
 }
 
 function mapTimeframeContext(context: ServiceTimeframeContext | undefined): BacktestTimeframeContext | undefined {

@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 
 import { CodedServiceError, type ServiceErrorEnvelope } from "./lib/errors.js";
 import { registerBacktestRoutes } from "./routes/backtest.js";
+import { registerOptimizationRoutes } from "./routes/optimization.js";
 import { registerVerifyRoutes } from "./routes/verify.js";
 
 export const SERVICE_VERSION = "0.1.0";
@@ -17,6 +18,7 @@ export function buildServer(options: { logger?: boolean } = {}): FastifyInstance
   app.get("/healthz", async () => ({ ok: true, engine: "quickjs-cli", version: SERVICE_VERSION }));
 
   registerBacktestRoutes(app);
+  registerOptimizationRoutes(app);
   registerVerifyRoutes(app);
 
   app.setErrorHandler((error, _request, reply) => {
