@@ -1,4 +1,4 @@
-import type { StrategyContract } from "../semantics/contract.js";
+import type { ContractValue, StrategyContract } from "../semantics/contract.js";
 
 /**
  * Parameter discovery and application for the parameter lab. This is a faithful
@@ -199,13 +199,16 @@ export function extractParameterSchema(contract: StrategyContract): ParameterDef
       });
     });
     if (rule.decision.type !== "open") return;
-    const decisionParameters: Array<{ field: "sizeValue" | "stopLossPercent" | "takeProfitRiskReward"; label: string; unit: ParameterUnit; value: number | null }> = [
+    const decisionParameters: Array<{ field: "sizeValue" | "stopLossPercent" | "takeProfitRiskReward"; label: string; unit: ParameterUnit; value: ContractValue }> = [
       { field: "sizeValue", label: "开仓仓位", unit: rule.decision.sizeKind === "fixedNotional" ? "quote" : "ratio", value: rule.decision.sizeValue },
       { field: "stopLossPercent", label: "止损距离", unit: "ratio", value: rule.decision.stopLossPercent },
       { field: "takeProfitRiskReward", label: "止盈风险回报比", unit: "riskReward", value: rule.decision.takeProfitRiskReward },
     ];
+    // A field that computes its value is deliberately not offered as a tunable
+    // number: replacing the expression with one would discard the calculation the
+    // customer confirmed. Its own constants stay adjustable through the program.
     for (const item of decisionParameters) {
-      if (item.value === null || !Number.isFinite(item.value)) continue;
+      if (typeof item.value !== "number" || !Number.isFinite(item.value)) continue;
       parameters.push({
         id: `rule.${ruleIndex}.decision.${item.field}`,
         label: `规则 ${ruleIndex + 1} · ${item.label}`,

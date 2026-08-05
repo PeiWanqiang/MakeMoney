@@ -39,6 +39,10 @@ The audit contract is not executable. It must list every open/close rule using c
 - crossBelow uses the same four-operand form
 - for a different data timeframe use a prefix, for example timeframe("1h").rsi("close",14,0) < 30
 Sort is not required. Do not include reason text or warm-up/null guards as rules. Every decision field is required; use null for fields that do not apply.
+stopLossPercent and takeProfitRiskReward are quantified like any other operand. Emit a JSON number when the value is constant, and a canonical expression string when the program computes it, using the same indicator and market notation as the conditions with safe + - * / and parentheses. The expression is checked against the program, so it must be exactly what the program computes:
+- a fixed 5% stop is 0.05
+- a stop of two ATR expressed as a fraction of price is "atr(14,0)/market.close*2"
+Never round a computed stop into a constant, and never state a constant the program does not use.
 
 In the audit contract, write direct indicator names such as percentChange(...), never indicators.percentChange(...) or context.indicators.percentChange(...). Use market.close for the current close, never sma("close",1,0). "Prior N-bar high/low" means the OHLC high/low fields and must use highest("high",N,1) or lowest("low",N,1); use the close field only when the user explicitly says highest/lowest close.
 

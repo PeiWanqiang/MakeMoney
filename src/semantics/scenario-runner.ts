@@ -4,6 +4,7 @@ import { StrategySandboxSession, type StrategySemanticScenario } from "../runtim
 import {
   canonicalDecision,
   type ContractDecision,
+  type ContractValue,
   type ContractRule,
   type SemanticDiagnostic,
   type SemanticScenarioResult,
@@ -289,12 +290,49 @@ function expectedDecision(actual: StrategyDecision): ContractDecision | undefine
   };
 }
 
+/**
+ * Compares one decision field, resolving a contracted expression against the
+ * scenario the program just ran under.
+ *
+ * The program always returns a resolved number — the sandbox requires it — so a
+ * stop contracted as `atr(14,0)/market.close*2` can only be checked by computing
+ * the same arithmetic over the same inputs. A tolerance is used because the two
+ * evaluations reassociate the expression independently.
+ */
+function valuesAgree(contracted: ContractValue, actual: ContractValue, environment: ExpressionEnvironment): boolean {
+  if (contracted === null || actual === null) return contracted === actual;
+  const expected = typeof contracted === "number"
+    ? contracted
+    : evaluateNumericExpression(contracted, environment);
+  if (expected === undefined || typeof actual !== "number") return false;
+  return Math.abs(expected - actual) <= Math.max(1e-9, Math.abs(expected) * 1e-9);
+}
+
+function decisionsAgree(contracted: ContractDecision, actual: ContractDecision, environment: ExpressionEnvironment): boolean {
+  return contracted.type === actual.type
+    && contracted.side === actual.side
+    && contracted.sizeKind === actual.sizeKind
+    && contracted.sizeValue === actual.sizeValue
+    && valuesAgree(contracted.stopLossPercent, actual.stopLossPercent, environment)
+    && valuesAgree(contracted.takeProfitRiskReward, actual.takeProfitRiskReward, environment);
+}
+
+/**
+ * Indicator operands the base scenario must seed, taken from conditions and from
+ * decision fields alike: a stop computed from ATR reads an indicator that no
+ * condition necessarily mentions, and leaving it unset would make the program
+ * hold on a null guard instead of exercising the rule.
+ */
 function indicatorOperands(contract: StrategyContract): string[] {
   const operands = new Set<string>();
   const pattern = /(?:timeframe\("(?:1m|15m|1h|4h)"\)\.)?(?:sma|ema|highest|lowest|percentChange|standardDeviation|rsi|atr|macd|bollingerBands)\([^)]*\)(?:\.(?:macd|signal|histogram|middle|upper|lower))?/g;
+  const scan = (text: string): void => {
+    for (const match of text.matchAll(pattern)) operands.add(match[0]);
+  };
   for (const rule of contract.rules) {
-    for (const condition of rule.when) {
-      for (const match of condition.matchAll(pattern)) operands.add(match[0]);
+    for (const condition of rule.when) scan(condition);
+    for (const value of [rule.decision.stopLossPercent, rule.decision.takeProfitRiskReward]) {
+      if (typeof value === "string") scan(value);
     }
   }
   return [...operands];
@@ -337,9 +375,9 @@ async function runRuleScenario(
   const result = await session.runSemanticScenario(scenario);
   const actual = expectedDecision(result.decision);
   const positive = negativeConditionIndex === undefined;
-  const passed = unsupported.length === 0 && (positive
-    ? actual !== undefined && canonicalDecision(actual) === canonicalDecision(rule.decision)
-    : actual === undefined || canonicalDecision(actual) !== canonicalDecision(rule.decision));
+  const environment = scenarioEnvironment(scenario);
+  const agrees = actual !== undefined && decisionsAgree(rule.decision, actual, environment);
+  const passed = unsupported.length === 0 && (positive ? agrees : !agrees);
   const diagnostics: SemanticDiagnostic[] = [];
   if (unsupported.length > 0) diagnostics.push({ code: "UNSUPPORTED_SCENARIO_CONDITION", message: unsupported.join(", ") });
   if (!passed && unsupported.length === 0) diagnostics.push({

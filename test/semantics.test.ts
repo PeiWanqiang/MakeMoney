@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { emaTrendStrategy } from "../examples/strategies.js";
 import {
+  canonicalDecision,
   compareStrategyContracts,
   normalizeContract,
   readyContract,
@@ -192,5 +193,126 @@ describe("strategy semantic verification", () => {
       when: ['position.side == "flat"', 'percentChange("close",20) < -0.05'],
       decision: openLong,
     }]))).toEqual([]);
+  });
+
+  // The prompt has always offered arithmetic operands, but nothing could extract
+  // them: a condition using one was recorded as opaque, which made the verify
+  // gate refuse the strategy. Every such intent was rejected on arrival.
+  it("extracts arithmetic operands instead of treating them as opaque", async () => {
+    const source = `defineStrategy({
+      id: "test.buffered-breakout",
+      name: "Buffered breakout",
+      version: 1,
+      onBar(ctx) {
+        const priorHigh = ctx.indicators.highest("high", 20, 1);
+        const atr = ctx.indicators.atr(14);
+        if (priorHigh === null || atr === null) return { type: "hold" };
+        if (ctx.position.side === "flat" && ctx.market.close > priorHigh * 1.02) {
+          return { type: "open", side: "long", size: { kind: "riskPercent", value: 0.01 }, stopLossPercent: 0.05 };
+        }
+        if (ctx.position.side === "long" && ctx.market.close < priorHigh - atr * 2) {
+          return { type: "close", reason: "pullback" };
+        }
+        return { type: "hold" };
+      }
+    })`;
+    const arithmeticContract = readyContract("1h", [
+      { when: ['position.side == "flat"', 'market.close > highest("high",20,1)*1.02'], decision: openLong },
+      {
+        when: ['position.side == "long"', 'market.close < highest("high",20,1)-atr(14,0)*2'],
+        decision: { type: "close", side: null, sizeKind: null, sizeValue: null, stopLossPercent: null, takeProfitRiskReward: null },
+      },
+    ]);
+    const report = await verifyStrategySemantics(source, arithmeticContract);
+    expect(report.extracted.opaqueConditions).toEqual([]);
+    expect(report.diagnostics).toEqual([]);
+    expect(report.scenarios.every((scenario) => scenario.passed)).toBe(true);
+    expect(report.ok).toBe(true);
+  });
+
+  // Redundant grouping must not read as a different rule: the contract carries
+  // the model's spelling while the program carries its own.
+  it("treats equivalent parenthesizations of one expression as the same rule", () => {
+    const grouped = readyContract("1h", [{
+      when: ['market.close < highest("high",20,1)-(atr(14,0)*2)'],
+      decision: openLong,
+    }]);
+    const flat = readyContract("1h", [{
+      when: ['market.close < highest("high",20,1)-atr(14,0)*2'],
+      decision: openLong,
+    }]);
+    expect(compareStrategyContracts(grouped, flat)).toEqual([]);
+  });
+});
+
+// A stop sized from ATR is not a new kind of field, it is an operand the
+// contract grammar can already spell. Quantifying it as an expression is what
+// lets the gate check the calculation rather than only a number it produced.
+describe("expression-valued decision fields", () => {
+  const atrStopSource = `defineStrategy({
+    id: "test.atr-stop",
+    name: "ATR-sized stop",
+    version: 1,
+    onBar(ctx) {
+      const rsi = ctx.indicators.rsi("close", 14);
+      const atr = ctx.indicators.atr(14);
+      if (rsi === null || atr === null) return { type: "hold" };
+      if (ctx.position.side === "flat" && rsi < 30) {
+        return {
+          type: "open",
+          side: "long",
+          size: { kind: "riskPercent", value: 0.01 },
+          stopLossPercent: atr / ctx.market.close * 2,
+          takeProfitRiskReward: 2
+        };
+      }
+      return { type: "hold" };
+    }
+  })`;
+
+  const atrStopContract = (stop: string | number) => readyContract("1h", [{
+    when: ['position.side == "flat"', 'rsi("close",14,0) < 30'],
+    decision: {
+      type: "open", side: "long", sizeKind: "riskPercent", sizeValue: 0.01,
+      stopLossPercent: stop, takeProfitRiskReward: 2,
+    },
+  }]);
+
+  it("extracts a computed stop as a canonical expression", () => {
+    const extracted = extractStrategySemantics(atrStopSource);
+    expect(extracted.rules[0]?.decision.stopLossPercent).toBe("atr(14,0)/market.close*2");
+  });
+
+  it("verifies a program whose stop is computed from ATR", async () => {
+    const report = await verifyStrategySemantics(atrStopSource, atrStopContract("atr(14,0)/market.close*2"));
+    expect(report.diagnostics).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
+  // The point of quantifying the calculation: a contract claiming a different
+  // multiplier than the program uses has to be caught, or the expression would
+  // have bought expressiveness by giving up the check.
+  it("rejects a contract whose stop multiplier differs from the program", async () => {
+    const report = await verifyStrategySemantics(atrStopSource, atrStopContract("atr(14,0)/market.close*3"));
+    expect(report.ok).toBe(false);
+  });
+
+  it("rejects a contract that reduces a computed stop to a constant", async () => {
+    const report = await verifyStrategySemantics(atrStopSource, atrStopContract(0.05));
+    expect(report.ok).toBe(false);
+  });
+
+  it("keeps a constant stop as a number so stored contracts read back unchanged", () => {
+    const constant = readyContract("1h", [{ when: ['position.side == "flat"'], decision: openLong }]);
+    expect(constant.rules[0]?.decision.stopLossPercent).toBe(0.05);
+    expect(canonicalDecision(constant.rules[0]!.decision)).toContain('"stopLossPercent":0.05');
+  });
+
+  it("collapses an expression that is really a constant", () => {
+    const spelled = readyContract("1h", [{
+      when: ['position.side == "flat"'],
+      decision: { ...openLong, stopLossPercent: "0.05" },
+    }]);
+    expect(canonicalDecision(spelled.rules[0]!.decision)).toBe(canonicalDecision(openLong));
   });
 });

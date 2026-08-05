@@ -31,8 +31,12 @@ interface StrategyEnv {
  * Bumped again when the prompt started carrying the Strategy SDK declaration:
  * artifacts cached under the old prompt were generated without a program shape
  * spec, so some of them do not compile and must never be replayed from cache.
+ *
+ * Bumped again when decision fields became expressions: artifacts cached before
+ * that were produced under a prompt that called a computed stop unsupported, so
+ * replaying one would keep reporting an intent the engine can now express.
  */
-const STRATEGY_CACHE_VERSION = "strategy-intent-v6-sdk-declaration";
+const STRATEGY_CACHE_VERSION = "strategy-intent-v7-expression-decisions";
 let strategySchemaReady: Promise<unknown> | null = null;
 
 interface AnalyzeBody {
@@ -48,7 +52,7 @@ You are ProofTrade's strategy-intent engine. Convert a user's crypto trading ide
 Choose exactly one status:
 - ready: entry, direction, evaluation timeframe, position sizing and stop loss are all explicit enough to program.
 - needs_clarification: the request is a strategy but execution-critical facts are missing or ambiguous.
-- unsupported: the meaning is clear but requires capabilities outside OHLCV, funding rate, open interest, SMA, EMA, RSI, MACD, ATR, Bollinger Bands, highest/lowest, percent change, safe + - * / arithmetic, 1m/15m/1h/4h closed-bar data, long/short, fixed-notional/equity-percent/risk-percent sizing, percentage stop and risk/reward take profit.
+- unsupported: the meaning is clear but requires capabilities outside OHLCV, funding rate, open interest, SMA, EMA, RSI, MACD, ATR, Bollinger Bands, highest/lowest, percent change, safe + - * / arithmetic, 1m/15m/1h/4h closed-bar data, long/short, fixed-notional/equity-percent/risk-percent sizing, and a stop or risk/reward take profit that is either a constant or computed from the indicators and market fields above (for example an ATR-sized stop).
 
 Rules:
 - all user-visible text must be written in the required output language supplied with the request. This includes strategyName, summary, resolvedIntent, clarificationQuestions, unsupportedCapabilities, assumptions and warnings;
@@ -107,6 +111,11 @@ defineStrategy({
     - crossAbove(ema("close",20,0),ema("close",20,1),ema("close",50,0),ema("close",50,1)); use crossBelow for the reverse
     - for a higher data timeframe, prefix every operand, for example timeframe("1h").rsi("close",14,0) < 30
     Never put prose, reasons, warm-up checks or invented aliases in contract.when. Percentages are decimal fractions: 1% is 0.01. Level comparisons are not crossing events. Every decision field is required and unused fields are null.
+    stopLossPercent and takeProfitRiskReward are quantified the same way a condition operand is. Emit a JSON number when the value is constant, and a canonical expression string when the program computes it, using the same indicator and market notation as contract.when with safe + - * / and parentheses. The expression must be exactly what the program computes, because it is checked against the program:
+    - a fixed 5% stop is 0.05
+    - a stop of two ATR expressed as a fraction of price is "atr(14,0)/market.close*2"
+    - a stop of one and a half ATR is "atr(14,0)/market.close*1.5"
+    Never round a computed stop into a constant, and never state a constant the program does not use.
     Position sizing semantics are strict: "50% of account balance/equity as position notional" is sizeKind equityPercent with sizeValue 0.5; "risk 1% of account per trade" is riskPercent with sizeValue 0.01; an absolute quote-currency amount is fixedNotional. Never substitute one sizing meaning for another. A percentage take profit is represented as takeProfitRiskReward divided by stop loss: 10% take profit with 5% stop loss is 2.
 
     Return one JSON object only:

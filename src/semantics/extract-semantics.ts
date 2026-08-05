@@ -3,9 +3,10 @@ import ts from "typescript";
 import type {
   ContractDecision,
   ContractRule,
+  ContractValue,
   ExtractedStrategySemantics,
 } from "./contract.js";
-import { canonicalNumericExpression } from "./expression.js";
+import { canonicalNumericExpression } from "./expression-ast.js";
 
 type Variables = Map<string, ts.Expression>;
 
@@ -208,7 +209,20 @@ function numberProperty(object: ts.ObjectLiteralExpression, name: string): numbe
   return typeof value === "number" ? value : null;
 }
 
-function decisionFromReturn(statement: ts.ReturnStatement): ContractDecision | undefined {
+/**
+ * Reads a decision field that may compute its value, e.g. a stop sized from ATR.
+ * A field the grammar cannot express stays null, which surfaces as a rule
+ * mismatch rather than a silently dropped risk parameter.
+ */
+function valueProperty(object: ts.ObjectLiteralExpression, name: string, variables: Variables): ContractValue {
+  const node = objectProperty(object, name);
+  if (!node) return null;
+  const value = literal(node);
+  if (typeof value === "number") return value;
+  return canonicalExpression(node, variables) ?? null;
+}
+
+function decisionFromReturn(statement: ts.ReturnStatement, variables: Variables): ContractDecision | undefined {
   if (!statement.expression || !ts.isObjectLiteralExpression(statement.expression)) return undefined;
   const type = literal(objectProperty(statement.expression, "type"));
   if (type !== "open" && type !== "close") return undefined;
@@ -228,8 +242,8 @@ function decisionFromReturn(statement: ts.ReturnStatement): ContractDecision | u
     side,
     sizeKind,
     sizeValue,
-    stopLossPercent: numberProperty(statement.expression, "stopLossPercent"),
-    takeProfitRiskReward: numberProperty(statement.expression, "takeProfitRiskReward"),
+    stopLossPercent: valueProperty(statement.expression, "stopLossPercent", variables),
+    takeProfitRiskReward: valueProperty(statement.expression, "takeProfitRiskReward", variables),
   };
 }
 
@@ -266,7 +280,7 @@ function walkStatement(
     return;
   }
   if (ts.isReturnStatement(statement)) {
-    const decision = decisionFromReturn(statement);
+    const decision = decisionFromReturn(statement, variables);
     if (decision) {
       rules.push({ when: [...new Set(path)].sort(), decision });
       opaqueConditions.push(...opaquePath);

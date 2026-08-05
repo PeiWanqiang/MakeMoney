@@ -37,8 +37,14 @@ interface ContractDecision {
   side: "long" | "short" | null;
   sizeKind: "riskPercent" | "equityPercent" | "fixedNotional" | null;
   sizeValue: number | null;
-  stopLossPercent: number | null;
-  takeProfitRiskReward: number | null;
+  /**
+   * A constant, or an expression in the same grammar the conditions use, e.g.
+   * `atr(14,0)/market.close*2` for a stop sized from volatility. The service
+   * engine runs the real program, which resolves it to a number; only the
+   * fallback interpreter in this file needs it already reduced.
+   */
+  stopLossPercent: number | string | null;
+  takeProfitRiskReward: number | string | null;
 }
 
 interface ContractRule {
@@ -476,10 +482,17 @@ function validateContract(value: unknown): StrategyContract {
       if (!["long", "short"].includes(String(decision.side))) throw new Error(`策略规则 ${index + 1} 缺少开仓方向`);
       if (!["riskPercent", "equityPercent", "fixedNotional"].includes(String(decision.sizeKind))) throw new Error(`策略规则 ${index + 1} 的仓位类型无效`);
       const sizeValue = Number(decision.sizeValue);
-      const stopLossPercent = Number(decision.stopLossPercent);
       if (!Number.isFinite(sizeValue) || sizeValue <= 0) throw new Error(`策略规则 ${index + 1} 的仓位数值无效`);
       if (decision.sizeKind !== "fixedNotional" && sizeValue > 1) throw new Error(`策略规则 ${index + 1} 的仓位百分比不能超过 100%`);
-      if (!Number.isFinite(stopLossPercent) || stopLossPercent <= 0 || stopLossPercent > 1) throw new Error(`策略规则 ${index + 1} 的止损比例无效`);
+      // A stop may be a constant or an expression that sizes it from market
+      // data, e.g. `atr(14,0)/market.close*2`. The range check only applies to a
+      // constant; an expression is bounded by the sandbox when it resolves.
+      if (typeof decision.stopLossPercent === "string") {
+        if (decision.stopLossPercent.trim() === "") throw new Error(`策略规则 ${index + 1} 的止损比例无效`);
+      } else {
+        const stopLossPercent = Number(decision.stopLossPercent);
+        if (!Number.isFinite(stopLossPercent) || stopLossPercent <= 0 || stopLossPercent > 1) throw new Error(`策略规则 ${index + 1} 的止损比例无效`);
+      }
     }
     return { when: record.when as string[], decision: decision as unknown as ContractDecision };
   });
@@ -657,13 +670,15 @@ function extractParameterSchema(contract: StrategyContract): ParameterDefinition
       });
     });
     if (rule.decision.type !== "open") return;
-    const decisionParameters: Array<{ field: "sizeValue" | "stopLossPercent" | "takeProfitRiskReward"; label: string; unit: ParameterUnit; value: number | null }> = [
+    const decisionParameters: Array<{ field: "sizeValue" | "stopLossPercent" | "takeProfitRiskReward"; label: string; unit: ParameterUnit; value: number | string | null }> = [
       { field: "sizeValue", label: "开仓仓位", unit: rule.decision.sizeKind === "fixedNotional" ? "quote" : "ratio", value: rule.decision.sizeValue },
       { field: "stopLossPercent", label: "止损距离", unit: "ratio", value: rule.decision.stopLossPercent },
       { field: "takeProfitRiskReward", label: "止盈风险回报比", unit: "riskReward", value: rule.decision.takeProfitRiskReward },
     ];
+    // A field that computes its value is not offered as a tunable number:
+    // replacing the expression with one would discard the calculation.
     for (const item of decisionParameters) {
-      if (item.value === null || !Number.isFinite(item.value)) continue;
+      if (typeof item.value !== "number" || !Number.isFinite(item.value)) continue;
       parameters.push({
         id: `rule.${ruleIndex}.decision.${item.field}`,
         label: `规则 ${ruleIndex + 1} · ${item.label}`,
@@ -1389,18 +1404,24 @@ export function runContractBacktest(contract: StrategyContract, bars: Bar[], con
     }
     if (pending?.type === "open" && !position) {
       if (!pending.side || !pending.sizeKind || !pending.sizeValue || !pending.stopLossPercent) throw new Error("开仓规则缺少方向、仓位或止损");
+      // This interpreter reads the contract directly rather than running the
+      // program, so it can only act on a stop that is already a number. The
+      // service engine executes the real program and resolves the expression
+      // itself, which is why only this fallback path is limited.
+      if (typeof pending.stopLossPercent !== "number") throw new CodedError("EXPRESSION_NEEDS_SERVICE_ENGINE");
       const decision: ContractDecision = pending;
+      const stopLossPercent = pending.stopLossPercent;
       const entryPrice = withSlippage(bar.open, decision.side === "long" ? "buy" : "sell");
       const requestedNotional: number = decision.sizeKind === "fixedNotional"
         ? decision.sizeValue!
         : decision.sizeKind === "equityPercent"
           ? cash * decision.sizeValue!
-          : cash * decision.sizeValue! / decision.stopLossPercent!;
+          : cash * decision.sizeValue! / stopLossPercent;
       const quantity: number = Math.min(requestedNotional, cash * config.maxLeverage) / entryPrice;
       const entryFee = entryPrice * quantity * config.takerFeeRate;
       cash -= entryFee;
       const direction = decision.side === "long" ? 1 : -1;
-      const stopDistance = entryPrice * decision.stopLossPercent!;
+      const stopDistance = entryPrice * stopLossPercent;
       position = {
         side: decision.side!,
         quantity,
@@ -1409,7 +1430,7 @@ export function runContractBacktest(contract: StrategyContract, bars: Bar[], con
         entryFee,
         entrySlippageCost: Math.abs(entryPrice - bar.open) * quantity,
         stopPrice: entryPrice - direction * stopDistance,
-        takeProfitPrice: decision.takeProfitRiskReward ? entryPrice + direction * stopDistance * decision.takeProfitRiskReward : null,
+        takeProfitPrice: typeof decision.takeProfitRiskReward === "number" ? entryPrice + direction * stopDistance * decision.takeProfitRiskReward : null,
       };
     } else if (pending?.type === "close" && position) closePosition(bar, bar.open, "strategy");
     pending = null;

@@ -515,6 +515,7 @@ export const en: Messages = {
     ADOPT_FAILED: "The new strategy version was not created",
     RANGE_TOO_LARGE: (timeframe: string, maxBars: string) => `A ${timeframe} backtest covers at most ${maxBars} bars. Please shorten the date range.`,
     OHLCV_ONLY: "Web backtests only carry OHLCV. Funding rate and open interest strategies need the full local engine.",
+    EXPRESSION_NEEDS_SERVICE_ENGINE: "This strategy computes its stop from market data, which needs the full backtest engine.",
     STRATEGY_VERIFY_FAILED: "The generated program does not match the understood strategy. Please adjust and try again.",
     STRATEGY_VERIFY_UNAVAILABLE: "The strategy verification service is temporarily unavailable, so the program cannot be confirmed runnable. Please retry shortly.",
     COMPILE_FAILED: "This strategy's program does not compile, so it cannot be backtested. Please regenerate the strategy.",

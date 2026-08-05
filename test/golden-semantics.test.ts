@@ -11,6 +11,11 @@ describe("golden strategy semantic corpus", () => {
     expect(new Set(GOLDEN_STRATEGY_CASES.map((item) => item.id)).size).toBe(20);
   });
 
+  // Each golden runs a positive and one negative scenario per condition in a
+  // fresh QuickJS sandbox. Arithmetic conditions used to extract as opaque, which
+  // short-circuited scenario running entirely, so the corpus only started paying
+  // for the scenarios it always claimed to cover once arithmetic became
+  // extractable.
   it("passes reverse extraction and behavior scenarios for every golden program", async () => {
     for (const item of GOLDEN_STRATEGY_CASES) {
       const report = await verifyStrategySemantics(item.source, item.contract);

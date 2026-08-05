@@ -11,21 +11,16 @@
  * a literal, since a stop computed from ATR is just an operand this grammar had
  * no way to express.
  *
- * Canonicalization and evaluation live together because they must agree: a
- * string produced by `canonicalNumericExpression` has to be readable by
- * `evaluateNumericExpression`, and a scenario is only meaningful if the value the
- * verifier computes is the value the sandbox computed.
+ * This module is the pure half: parsing, evaluating and re-emitting canonical
+ * expression text. The AST canonicalizer lives in `expression-ast.ts` so that
+ * callers needing only evaluation do not pull in the TypeScript compiler.
  */
-import ts from "typescript";
 
 /** Indicator names that may appear as canonical operands. */
 export const INDICATOR_NAMES = [
   "sma", "ema", "highest", "lowest", "percentChange",
   "standardDeviation", "rsi", "atr", "macd", "bollingerBands",
 ] as const;
-
-/** Composite indicator members reachable with a trailing property access. */
-const INDICATOR_MEMBERS = new Set(["macd", "signal", "histogram", "middle", "upper", "lower"]);
 
 const INDICATOR_PATTERN = new RegExp(
   `^(?:timeframe\\("(?:1m|15m|1h|4h)"\\)\\.)?(?:${INDICATOR_NAMES.join("|")})\\(`,
@@ -54,7 +49,7 @@ export function isIndicatorOperand(value: string): boolean {
  * A `+` or `-` directly after another operator or an opening parenthesis is a
  * sign, not a binary operator, and must not split.
  */
-function splitBinary(value: string, operators: string): { left: string; operator: string; right: string } | undefined {
+export function splitBinary(value: string, operators: string): { left: string; operator: string; right: string } | undefined {
   let depth = 0;
   let quoted = false;
   for (let index = value.length - 1; index >= 0; index -= 1) {
@@ -72,7 +67,7 @@ function splitBinary(value: string, operators: string): { left: string; operator
   return undefined;
 }
 
-function stripOuterParentheses(value: string): string {
+export function stripOuterParentheses(value: string): string {
   let output = value.trim();
   while (output.startsWith("(") && output.endsWith(")")) {
     let depth = 0;
@@ -162,61 +157,46 @@ export function isCompositeExpression(expression: string): boolean {
   return splitBinary(value, "+-") !== undefined || splitBinary(value, "*/") !== undefined;
 }
 
-type Variables = Map<string, ts.Expression>;
+const precedence = (operator: string): number => (operator === "+" || operator === "-" ? 1 : 2);
 
-export interface CanonicalContext {
-  /** Resolves an identifier to the expression it was assigned, following aliases. */
-  resolve: (node: ts.Expression, variables: Variables) => ts.Expression;
-  /** Canonicalizes a leaf operand: literal, indicator call, market path, state read. */
-  leaf: (node: ts.Expression, variables: Variables) => string | undefined;
-}
-
-function binaryOperatorText(kind: ts.SyntaxKind): string | undefined {
-  if (kind === ts.SyntaxKind.PlusToken) return "+";
-  if (kind === ts.SyntaxKind.MinusToken) return "-";
-  if (kind === ts.SyntaxKind.AsteriskToken) return "*";
-  if (kind === ts.SyntaxKind.SlashToken) return "/";
-  return undefined;
-}
-
-/** Parenthesizes a nested operand only where precedence would otherwise change. */
-function operandText(text: string, parentOperator: string, side: "left" | "right"): string {
-  if (!isCompositeExpression(text)) return text;
-  const split = splitBinary(stripOuterParentheses(text), "+-") ?? splitBinary(stripOuterParentheses(text), "*/");
-  const childOperator = split?.operator ?? "";
-  const additive = (operator: string): boolean => operator === "+" || operator === "-";
-  if (additive(childOperator) && !additive(parentOperator)) return `(${text})`;
-  if (side === "right" && (parentOperator === "-" || parentOperator === "/")) return `(${text})`;
-  if (additive(parentOperator) && additive(childOperator) && side === "right") return `(${text})`;
-  return text;
+/**
+ * Parenthesizes a nested operand only where precedence or associativity would
+ * otherwise change its meaning, so two spellings of the same arithmetic reduce
+ * to one canonical string. Without that, a contract saying `high-atr*2` and a
+ * program computing `high-(atr*2)` compare as different rules.
+ */
+export function operandText(text: string, parentOperator: string, side: "left" | "right"): string {
+  const value = stripOuterParentheses(text);
+  const split = splitBinary(value, "+-") ?? splitBinary(value, "*/");
+  if (!split) return value;
+  const child = precedence(split.operator);
+  const parent = precedence(parentOperator);
+  if (child < parent) return `(${value})`;
+  // Subtraction and division do not associate, so an equal-precedence operand on
+  // their right has to keep its grouping.
+  if (child === parent && side === "right" && (parentOperator === "-" || parentOperator === "/")) return `(${value})`;
+  return value;
 }
 
 /**
- * Canonicalizes a numeric expression from the program AST, recursing through
- * safe arithmetic and delegating leaves to the caller's operand canonicalizer.
+ * Re-emits a canonical expression with redundant parentheses removed.
+ *
+ * Contract text arrives as the model wrote it, so the same arithmetic can reach
+ * the comparison in a different but equivalent grouping than the one extracted
+ * from the program. Both sides are put through this before they are compared.
  */
-export function canonicalNumericExpression(
-  node: ts.Expression,
-  variables: Variables,
-  context: CanonicalContext,
-): string | undefined {
-  const resolved = context.resolve(node, variables);
-  if (ts.isParenthesizedExpression(resolved)) {
-    return canonicalNumericExpression(resolved.expression, variables, context);
+export function normalizeExpressionText(expression: string): string {
+  const value = stripOuterParentheses(expression);
+  if (value === "") return expression.trim();
+  for (const operators of ["+-", "*/"]) {
+    const split = splitBinary(value, operators);
+    if (!split) continue;
+    const left = normalizeExpressionText(split.left);
+    const right = normalizeExpressionText(split.right);
+    return `${operandText(left, split.operator, "left")}${split.operator}${operandText(right, split.operator, "right")}`;
   }
-  // A leaf is tried first: a negative numeric literal is one operand, not a
-  // negation of a positive one, and indicator calls carry their own parentheses.
-  const leaf = context.leaf(resolved, variables);
-  if (leaf !== undefined) return leaf;
-  if (ts.isPrefixUnaryExpression(resolved) && resolved.operator === ts.SyntaxKind.MinusToken) {
-    const operand = canonicalNumericExpression(resolved.operand, variables, context);
-    return operand === undefined ? undefined : `-${operandText(operand, "*", "right")}`;
-  }
-  if (!ts.isBinaryExpression(resolved)) return undefined;
-  const operator = binaryOperatorText(resolved.operatorToken.kind);
-  if (!operator) return undefined;
-  const left = canonicalNumericExpression(resolved.left, variables, context);
-  const right = canonicalNumericExpression(resolved.right, variables, context);
-  if (left === undefined || right === undefined) return undefined;
-  return `${operandText(left, operator, "left")}${operator}${operandText(right, operator, "right")}`;
+  if (value.startsWith("-")) return `-${operandText(normalizeExpressionText(value.slice(1)), "*", "right")}`;
+  return value;
 }
+
+

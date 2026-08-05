@@ -1,12 +1,34 @@
+import { normalizeExpressionText } from "./expression.js";
+
 export type ContractTimeframe = "1m" | "15m" | "1h" | "4h";
+
+/**
+ * A quantified decision field: a constant, or an expression in the same grammar
+ * the conditions use.
+ *
+ * Modelling these as bare numbers meant the contract could only quantify a stop
+ * the model had already reduced to a literal, so a stop sized from ATR had no
+ * representation at all and the intent had to be reported as unsupported. The
+ * grammar that already describes conditions covers it without a new field per
+ * pattern, and a constant stays a number so every stored contract still reads
+ * back unchanged.
+ */
+export type ContractValue = number | string | null;
 
 export interface ContractDecision {
   type: "open" | "close";
   side: "long" | "short" | null;
   sizeKind: "riskPercent" | "equityPercent" | "fixedNotional" | null;
   sizeValue: number | null;
-  stopLossPercent: number | null;
-  takeProfitRiskReward: number | null;
+  stopLossPercent: ContractValue;
+  takeProfitRiskReward: ContractValue;
+}
+
+/** Collapses an expression that is really a constant, so constants have one form. */
+export function normalizeContractValue(value: ContractValue): ContractValue {
+  if (typeof value !== "string") return value;
+  const normalized = normalizeExpressionText(compactCondition(value));
+  return /^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(normalized) ? Number(normalized) : normalized;
 }
 
 export interface ContractRule {
@@ -59,8 +81,8 @@ export function canonicalDecision(decision: ContractDecision): string {
     side: decision.side,
     sizeKind: decision.sizeKind,
     sizeValue: decision.sizeValue,
-    stopLossPercent: decision.stopLossPercent,
-    takeProfitRiskReward: decision.takeProfitRiskReward,
+    stopLossPercent: normalizeContractValue(decision.stopLossPercent),
+    takeProfitRiskReward: normalizeContractValue(decision.takeProfitRiskReward),
   });
 }
 
@@ -84,7 +106,13 @@ export function compactCondition(value: string): string {
     result += character;
   }
   const comparison = findTopLevelRelationalComparison(result);
-  if (!comparison || comparison.left <= comparison.right) return result;
+  if (!comparison) return result;
+  // Arithmetic operands reach the contract as the model spelled them, so both
+  // sides are re-emitted in canonical grouping before anything is compared.
+  comparison.left = normalizeExpressionText(comparison.left);
+  comparison.right = normalizeExpressionText(comparison.right);
+  result = `${comparison.left}${comparison.operator}${comparison.right}`;
+  if (comparison.left <= comparison.right) return result;
   const inverted = comparison.operator === "<"
     ? ">"
     : comparison.operator === ">"

@@ -513,6 +513,7 @@ export const zh = {
     ADOPT_FAILED: "新策略版本没有创建成功",
     RANGE_TOO_LARGE: (timeframe: string, maxBars: string) => `${timeframe} 周期最多回测 ${maxBars} 根 K 线，请缩短日期范围`,
     OHLCV_ONLY: "当前网页回测数据只包含 OHLCV；资金费率和持仓量策略请使用完整本地引擎",
+    EXPRESSION_NEEDS_SERVICE_ENGINE: "这条策略的止损由行情计算得出，需要完整回测引擎才能运行",
     STRATEGY_VERIFY_FAILED: "生成的程序与策略理解不一致，请调整描述后重试",
     STRATEGY_VERIFY_UNAVAILABLE: "策略校验服务暂时不可用，无法确认程序可执行，请稍后重试",
     COMPILE_FAILED: "策略程序无法编译，无法回测；请重新生成这条策略",

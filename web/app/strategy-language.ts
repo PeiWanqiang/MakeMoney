@@ -20,8 +20,9 @@ export interface ContractDecision {
   side?: string | null;
   sizeKind?: string | null;
   sizeValue?: number | null;
-  stopLossPercent?: number | null;
-  takeProfitRiskReward?: number | null;
+  /** A constant, or an expression in the same grammar the conditions use. */
+  stopLossPercent?: number | string | null;
+  takeProfitRiskReward?: number | string | null;
 }
 
 export interface ContractRule {
@@ -181,11 +182,19 @@ function describeRisk(messages: Messages, decision: ContractDecision): string[] 
     else if (decision.sizeKind === "fixedNotional") items.push(messages.contract.riskFixedNotional(formatNumber(size)));
     else items.push(messages.contract.riskSize(formatNumber(size)));
   }
+  // A stop or target may be sized from market data rather than fixed, so the
+  // expression is read back the same way a condition is. Disclosing "止损 2×ATR"
+  // is the whole point of quantifying it: the customer confirms the calculation,
+  // not just whatever number it happened to produce.
   if (typeof decision.stopLossPercent === "number" && Number.isFinite(decision.stopLossPercent)) {
     items.push(messages.contract.riskStopLoss(formatPercent(decision.stopLossPercent)));
+  } else if (typeof decision.stopLossPercent === "string" && decision.stopLossPercent.trim()) {
+    items.push(messages.contract.riskStopLoss(humanizeExpression(messages, decision.stopLossPercent)));
   }
   if (typeof decision.takeProfitRiskReward === "number" && Number.isFinite(decision.takeProfitRiskReward)) {
     items.push(messages.contract.riskTakeProfit(formatNumber(decision.takeProfitRiskReward)));
+  } else if (typeof decision.takeProfitRiskReward === "string" && decision.takeProfitRiskReward.trim()) {
+    items.push(messages.contract.riskTakeProfit(humanizeExpression(messages, decision.takeProfitRiskReward)));
   }
   return items;
 }
