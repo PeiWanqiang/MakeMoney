@@ -1,6 +1,7 @@
+import { TIMEFRAME_PATTERN, type Timeframe } from "../core/timeframes.js";
 import { normalizeExpressionText } from "./expression.js";
 
-export type ContractTimeframe = "1m" | "15m" | "1h" | "4h";
+export type ContractTimeframe = Timeframe;
 
 /**
  * A quantified decision field: a constant, or an expression in the same grammar
@@ -210,13 +211,17 @@ function splitConditionArguments(value: string): string[] {
   return parts;
 }
 
+const TIMEFRAME_CROSS_PATTERN = new RegExp(
+  `^timeframe\\("(${TIMEFRAME_PATTERN})"\\)\\.(crossAbove|crossBelow)\\((.*)\\)$`,
+);
+
 export function normalizeConditionNotation(input: string): string {
   let value = input.trim()
     .replace(/\bcontext\.indicators\./g, "")
     .replace(/\bindicators\./g, "")
     .replace(/\bcrossedAbove\s*\(/g, "crossAbove(")
     .replace(/\bcrossedBelow\s*\(/g, "crossBelow(");
-  const timeframeCross = /^timeframe\("(1m|15m|1h|4h)"\)\.(crossAbove|crossBelow)\((.*)\)$/.exec(value);
+  const timeframeCross = TIMEFRAME_CROSS_PATTERN.exec(value);
   if (timeframeCross) {
     const interval = timeframeCross[1] ?? "";
     const name = timeframeCross[2] ?? "";

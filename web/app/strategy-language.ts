@@ -68,7 +68,7 @@ function lagSuffix(messages: Messages, lag: string | number | undefined): string
 export function humanizeExpression(messages: Messages, expression: string): string {
   const { contract } = messages;
   let text = expression.trim();
-  text = text.replace(/timeframe\("(1m|15m|1h|4h)"\)\./g, (_match, timeframe: string) =>
+  text = text.replace(/timeframe\("(1m|15m|1h|4h|1d|1w)"\)\./g, (_match, timeframe: string) =>
     contract.higherTimeframe(contract.timeframes[timeframe] ?? timeframe),
   );
   text = text.replace(

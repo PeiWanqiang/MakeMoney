@@ -1,3 +1,4 @@
+import { TIMEFRAMES as SUPPORTED_TIMEFRAMES } from "../core/timeframes.js";
 import { normalizeContract, type StrategyContract } from "../semantics/contract.js";
 import { sha256 } from "./pipeline.js";
 import type { InternetIntentCandidate, InternetIntentLanguage, InternetIntentSource } from "./types.js";
@@ -127,7 +128,7 @@ export interface GoldenCorpusOptions {
 
 const DISPOSITIONS = new Set<InternetIntentDisposition>(["ready", "needs_clarification", "unsupported", "not_strategy"]);
 const CONFIDENCES = new Set<InternetIntentConfidence>(["high", "medium", "low"]);
-const TIMEFRAMES = new Set(["1m", "15m", "1h", "4h"]);
+const TIMEFRAMES = new Set<string>(SUPPORTED_TIMEFRAMES);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -163,7 +164,7 @@ function contractDiagnostics(value: unknown): string[] {
   const diagnostics: string[] = [];
   if (value.schemaVersion !== "1.0") diagnostics.push("contract.schemaVersion must be 1.0.");
   if (typeof value.timeframe !== "string" || !TIMEFRAMES.has(value.timeframe)) {
-    diagnostics.push("contract.timeframe must be one of 1m, 15m, 1h or 4h.");
+    diagnostics.push(`contract.timeframe must be one of ${SUPPORTED_TIMEFRAMES.join(", ")}.`);
   }
   if (!Array.isArray(value.unsupportedCapabilities) || !value.unsupportedCapabilities.every((item) => typeof item === "string")) {
     diagnostics.push("contract.unsupportedCapabilities must be a string array.");

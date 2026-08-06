@@ -93,6 +93,25 @@ describe("historical 1m data", () => {
     });
   });
 
+  it("opens daily buckets at UTC midnight", () => {
+    const start = Date.parse("2024-03-05T00:00:00Z");
+    const minutes = Array.from({ length: 1440 }, (_, index) => bar(start + index * 60_000, 100 + index));
+    const result = aggregateOneMinuteBars(minutes, "1d");
+    expect(result.bars).toHaveLength(1);
+    expect(result.bars[0]!.timestamp).toBe(start);
+  });
+
+  it("opens weekly buckets on Monday, not on the epoch's Thursday", () => {
+    // 2024-03-04 is a Monday; epoch-anchored bucketing would open this week on
+    // the preceding Thursday and split it across two bars.
+    const monday = Date.parse("2024-03-04T00:00:00Z");
+    const minutes = Array.from({ length: 7 * 1440 }, (_, index) => bar(monday + index * 60_000, 100 + index));
+    const result = aggregateOneMinuteBars(minutes, "1w");
+    expect(result.bars).toHaveLength(1);
+    expect(result.bars[0]!.timestamp).toBe(monday);
+    expect(new Date(result.bars[0]!.timestamp).getUTCDay()).toBe(1);
+  });
+
   it("round-trips a partitioned Parquet dataset with hash verification", async () => {
     const directory = await mkdtemp(join(tmpdir(), "btc-history-"));
     try {

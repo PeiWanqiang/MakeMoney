@@ -207,7 +207,7 @@ export const zh = {
     ranges: {
       "3d": "最近 3 天", "7d": "最近 7 天", "30d": "最近 30 天",
       "60d": "最近 2 个月", "90d": "最近 3 个月", "180d": "最近 6 个月",
-      "365d": "最近 1 年", "1095d": "最近 3 年",
+      "365d": "最近 1 年", "1095d": "最近 3 年", "1825d": "最近 5 年", "2555d": "最近 7 年",
     } as Record<string, string>,
     startDate: "开始日期",
     endDate: "结束日期",
@@ -551,7 +551,7 @@ export const zh = {
   contract: {
     timeframeFallback: "所选周期的 K 线",
     timeframeSuffix: (label: string) => `${label} K 线`,
-    timeframes: { "1m": "1 分钟", "15m": "15 分钟", "1h": "1 小时", "4h": "4 小时" } as Record<string, string>,
+    timeframes: { "1m": "1 分钟", "15m": "15 分钟", "1h": "1 小时", "4h": "4 小时", "1d": "日线", "1w": "周线" } as Record<string, string>,
     fields: { open: "开盘价", high: "最高价", low: "最低价", close: "收盘价", volume: "成交量" } as Record<string, string>,
     comparisons: { ">": "高于", ">=": "不低于", "<": "低于", "<=": "不高于", "==": "等于" } as Record<string, string>,
     positions: { flat: "当前空仓", long: "当前持有多单", short: "当前持有空单" } as Record<string, string>,

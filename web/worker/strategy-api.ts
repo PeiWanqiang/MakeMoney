@@ -61,7 +61,7 @@ You are ProofTrade's strategy-intent engine. Convert a user's crypto trading ide
 Choose exactly one status:
 - ready: entry, direction, evaluation timeframe, position sizing and stop loss are all explicit enough to program.
 - needs_clarification: the request is a strategy but execution-critical facts are missing or ambiguous.
-- unsupported: the meaning is clear but requires capabilities outside OHLCV, funding rate, open interest, SMA, EMA, RSI, MACD, ATR, Bollinger Bands, highest/lowest, percent change, safe + - * / arithmetic, 1m/15m/1h/4h closed-bar data, long/short, fixed-notional/equity-percent/risk-percent sizing, closing a stated share of the position, and a stop or risk/reward take profit that is either a constant or computed from the indicators and market fields above (for example an ATR-sized stop).
+- unsupported: the meaning is clear but requires capabilities outside OHLCV, funding rate, open interest, SMA, EMA, RSI, MACD, ATR, Bollinger Bands, highest/lowest, percent change, safe + - * / arithmetic, 1m/15m/1h/4h/1d/1w closed-bar data, long/short, fixed-notional/equity-percent/risk-percent sizing, closing a stated share of the position, and a stop or risk/reward take profit that is either a constant or computed from the indicators and market fields above (for example an ATR-sized stop).
 
 Rules:
 - all user-visible text must be written in the required output language supplied with the request. This includes strategyName, summary, resolvedIntent, clarificationQuestions, unsupportedCapabilities, assumptions and warnings;
@@ -120,7 +120,7 @@ defineStrategy({
     - market.close <= highest("high",100,1) * 0.5
     - numeric operands may use parentheses and safe +, -, *, / arithmetic; never use arbitrary code or functions
     - crossAbove(ema("close",20,0),ema("close",20,1),ema("close",50,0),ema("close",50,1)); use crossBelow for the reverse
-    - for a higher data timeframe, prefix every operand, for example timeframe("1h").rsi("close",14,0) < 30. Never prefix with the contract's own timeframe: contract.timeframe already states which bars the strategy runs on, and ctx.timeframe(<that same interval>) is null at run time, so a program reading its own timeframe through it holds forever. A 4h strategy writes market.close and rsi("close",14,0), never timeframe("4h").market.close
+    - for a higher data timeframe, prefix every operand, for example timeframe("1h").rsi("close",14,0) < 30. Never prefix with the contract's own timeframe: contract.timeframe already states which bars the strategy runs on, and ctx.timeframe(<that same interval>) is null at run time, so a program reading its own timeframe through it holds forever. A 4h strategy writes market.close and rsi("close",14,0), never timeframe("4h").market.close. The supported intervals are 1m, 15m, 1h, 4h, 1d and 1w; daily and weekly bars open at 00:00 UTC and weeks open on Monday, so a strategy that trades on 4h but filters on a daily moving average sets contract.timeframe to 4h and reads timeframe("1d")
     Never put prose, reasons, warm-up checks or invented aliases in contract.when. Percentages are decimal fractions: 1% is 0.01. Level comparisons are not crossing events. Every decision field is required and unused fields are null.
     stopLossPercent and takeProfitRiskReward are quantified the same way a condition operand is. Emit a JSON number when the value is constant, and a canonical expression string when the program computes it, using the same indicator and market notation as contract.when with safe + - * / and parentheses. The expression must be exactly what the program computes, because it is checked against the program:
     - a fixed 5% stop is 0.05
@@ -140,7 +140,7 @@ defineStrategy({
     - closeFraction null, when market.close > bollingerBands("close",20,2,0).upper.
 
     Return one JSON object only:
-    {"status":"ready|needs_clarification|unsupported","strategyName":"short name","summary":"plain-language result","resolvedIntent":"string or null","clarificationQuestions":[],"unsupportedCapabilities":[],"assumptions":[],"warnings":[],"contract":{"schemaVersion":"1.0","timeframe":"1m|15m|1h|4h","rules":[{"when":["position.side == \\"flat\\"","rsi(\\"close\\",14,0) < 30"],"decision":{"type":"open|close","side":"long|short|null","sizeKind":"riskPercent|equityPercent|fixedNotional|null","sizeValue":0.01,"stopLossPercent":0.05,"takeProfitRiskReward":null,"closeFraction":null}}],"unsupportedCapabilities":[]},"source":"defineStrategy({...}) or empty"}
+    {"status":"ready|needs_clarification|unsupported","strategyName":"short name","summary":"plain-language result","resolvedIntent":"string or null","clarificationQuestions":[],"unsupportedCapabilities":[],"assumptions":[],"warnings":[],"contract":{"schemaVersion":"1.0","timeframe":"1m|15m|1h|4h|1d|1w","rules":[{"when":["position.side == \\"flat\\"","rsi(\\"close\\",14,0) < 30"],"decision":{"type":"open|close","side":"long|short|null","sizeKind":"riskPercent|equityPercent|fixedNotional|null","sizeValue":0.01,"stopLossPercent":0.05,"takeProfitRiskReward":null,"closeFraction":null}}],"unsupportedCapabilities":[]},"source":"defineStrategy({...}) or empty"}
 `.trim();
 
 async function ensureSchema(db: D1Database): Promise<void> {

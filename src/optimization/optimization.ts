@@ -1,8 +1,11 @@
+import { compileStrategySource } from "../compiler/compile-strategy-source.js";
 import type { BacktestConfig, ClosedTrade, MarketBar } from "../core/types.js";
 import { runBacktest } from "../runtime/backtest.js";
 import { calculateBacktestMetrics } from "../runtime/backtest-metrics.js";
-import type { ContractTimeframe, StrategyContract } from "../semantics/contract.js";
+import { TIMEFRAME_MS } from "../core/timeframes.js";
+import type { StrategyContract } from "../semantics/contract.js";
 import { applyParametersToSource } from "./program-apply.js";
+import { createEvaluationPool, type EvaluationPool, type WindowRequest } from "./evaluation-pool.js";
 import {
   extractParameterSchema,
   generateParameterCandidates,
@@ -118,25 +121,6 @@ export interface OptimizationInput {
 
 export type OptimizationObjective = OptimizationCoreResult["objective"];
 
-const TIMEFRAME_MS: Record<ContractTimeframe, number> = {
-  "1m": 60_000,
-  "15m": 15 * 60_000,
-  "1h": 60 * 60_000,
-  "4h": 4 * 60 * 60_000,
-};
-
-function compactResult(result: Awaited<ReturnType<typeof runBacktest>>): OptimizationMetrics {
-  const metrics = calculateBacktestMetrics(result);
-  return {
-    netReturn: metrics.netReturn,
-    maximumDrawdown: metrics.maximumDrawdown,
-    sharpe: metrics.sharpe,
-    winRate: metrics.winRate,
-    profitFactor: metrics.profitFactor,
-    tradeCount: metrics.tradeCount,
-  };
-}
-
 function optimizationScore(train: OptimizationMetrics, validation: OptimizationMetrics, objective: OptimizationObjective): number {
   const gap = Math.abs(train.netReturn - validation.netReturn);
   const lowTradePenalty = Math.max(0, 3 - validation.tradeCount) * 0.08;
@@ -147,60 +131,89 @@ function optimizationScore(train: OptimizationMetrics, validation: OptimizationM
     + sharpe * 0.04 + (validation.winRate ?? 0) * 0.03 - gap * 0.6 - lowTradePenalty;
 }
 
-/** Runs one program variant over a bar prefix, optionally from a window start. */
-async function runProgramWindow(
+/**
+ * Resolves a scoring window to the bar prefix and evaluation start the engine
+ * actually runs. Planning and execution share it so a request carries indices
+ * that already mean exactly one simulation.
+ */
+function windowRequest(
   source: string,
-  bars: MarketBar[],
+  barsLength: number,
   config: BacktestConfig,
   window?: { startIndex: number; endIndex: number },
-): Promise<OptimizationMetrics> {
-  if (!window) {
-    const result = await runBacktest(source, bars, config);
-    return compactResult(result);
-  }
-  const boundedStart = Math.max(0, Math.min(window.startIndex, bars.length - 2));
-  const boundedEnd = Math.max(boundedStart + 2, Math.min(window.endIndex, bars.length));
-  const result = await runBacktest(source, bars.slice(0, boundedEnd), {
-    ...config,
-    evaluationStartTime: bars[boundedStart]!.timestamp,
-  });
-  return compactResult(result);
+): WindowRequest {
+  // Compiling here rather than inside the engine means each program variant is
+  // type-checked once, however many windows it is measured over.
+  const program = compileStrategySource(source);
+  if (!window) return { program, endIndex: barsLength, evaluationStartIndex: null, config };
+  const startIndex = Math.max(0, Math.min(window.startIndex, barsLength - 2));
+  const endIndex = Math.max(startIndex + 2, Math.min(window.endIndex, barsLength));
+  return { program, endIndex, evaluationStartIndex: startIndex, config };
 }
 
-async function walkForwardEvidence(
+/**
+ * Each piece of robustness evidence is split into a plan and an assembly step.
+ * Planning decides which windows the evidence needs without running any of them,
+ * which lets the whole gate go to the pool as one batch instead of three
+ * sequential phases; assembly then reads the metrics back positionally.
+ */
+
+interface WalkForwardPlan {
+  requests: WindowRequest[];
+  folds: Array<Omit<WalkForwardFold, "baseline" | "candidate" | "passed">>;
+}
+
+function planWalkForward(
   baselineSource: string,
   candidateSource: string,
   developmentBars: MarketBar[],
   config: BacktestConfig,
-): Promise<RobustnessGate["walkForward"]> {
+): WalkForwardPlan {
   const initialTrain = Math.max(6, Math.floor(developmentBars.length * 0.5));
   const remaining = developmentBars.length - initialTrain;
-  const folds: WalkForwardFold[] = [];
+  const requests: WindowRequest[] = [];
+  const folds: WalkForwardPlan["folds"] = [];
   for (let index = 0; index < 3; index += 1) {
     const validationStart = initialTrain + Math.floor(remaining * index / 3);
     const validationEnd = initialTrain + Math.floor(remaining * (index + 1) / 3);
     if (validationEnd - validationStart < 2) continue;
-    const baseline = await runProgramWindow(baselineSource, developmentBars, config, { startIndex: validationStart, endIndex: validationEnd });
-    const candidate = await runProgramWindow(candidateSource, developmentBars, config, { startIndex: validationStart, endIndex: validationEnd });
-    const passed = candidate.tradeCount >= 1
-      && candidate.netReturn >= baseline.netReturn - 0.01
-      && candidate.maximumDrawdown >= baseline.maximumDrawdown - 0.03;
+    const window = { startIndex: validationStart, endIndex: validationEnd };
+    requests.push(windowRequest(baselineSource, developmentBars.length, config, window));
+    requests.push(windowRequest(candidateSource, developmentBars.length, config, window));
     folds.push({
       id: `WF${index + 1}`,
       trainBars: validationStart,
       validationBars: validationEnd - validationStart,
       validationStart: new Date(developmentBars[validationStart]!.timestamp).toISOString(),
       validationEnd: new Date(developmentBars[validationEnd - 1]!.timestamp).toISOString(),
-      baseline,
-      candidate,
-      passed,
     });
   }
+  return { requests, folds };
+}
+
+function buildWalkForward(plan: WalkForwardPlan, metrics: OptimizationMetrics[]): RobustnessGate["walkForward"] {
+  const folds: WalkForwardFold[] = plan.folds.map((fold, index) => {
+    const baseline = metrics[index * 2]!;
+    const candidate = metrics[index * 2 + 1]!;
+    return {
+      ...fold,
+      baseline,
+      candidate,
+      passed: candidate.tradeCount >= 1
+        && candidate.netReturn >= baseline.netReturn - 0.01
+        && candidate.maximumDrawdown >= baseline.maximumDrawdown - 0.03,
+    };
+  });
   const positiveFolds = folds.filter((fold) => fold.passed).length;
   return { passed: folds.length === 3 && positiveFolds >= 2, positiveFolds, folds };
 }
 
-async function sensitivityEvidence(
+interface SensitivityPlan {
+  requests: WindowRequest[];
+  points: Array<Pick<SensitivityPoint, "parameterId" | "direction" | "value">>;
+}
+
+function planSensitivity(
   baseSource: string,
   contract: StrategyContract,
   definitions: ParameterDefinition[],
@@ -209,12 +222,13 @@ async function sensitivityEvidence(
   developmentBars: MarketBar[],
   evaluationStartIndex: number,
   config: BacktestConfig,
-  objective: OptimizationObjective,
-): Promise<RobustnessGate["sensitivity"]> {
+): SensitivityPlan {
+  const window = { startIndex: evaluationStartIndex, endIndex: developmentBars.length };
   const candidateSource = applyParametersToSource(baseSource, contract, definitions, candidateValues);
-  const baseMetrics = await runProgramWindow(candidateSource, developmentBars, config, { startIndex: evaluationStartIndex, endIndex: developmentBars.length });
-  const baseScore = optimizationScore(baseMetrics, baseMetrics, objective);
-  const points: SensitivityPoint[] = [];
+  // The centre of the neighbourhood is the first request; every perturbation
+  // follows in selection order.
+  const requests: WindowRequest[] = [windowRequest(candidateSource, developmentBars.length, config, window)];
+  const points: SensitivityPlan["points"] = [];
   for (const selection of selections) {
     const definition = definitions.find((item) => item.id === selection.id)!;
     const center = candidateValues[selection.id] ?? definition.value;
@@ -226,42 +240,73 @@ async function sensitivityEvidence(
       if (bounded === center) continue;
       const values = { ...candidateValues, [selection.id]: bounded };
       const perturbedSource = applyParametersToSource(baseSource, contract, definitions, values);
-      const metrics = await runProgramWindow(perturbedSource, developmentBars, config, { startIndex: evaluationStartIndex, endIndex: developmentBars.length });
-      const score = optimizationScore(metrics, metrics, objective);
-      const tolerance = Math.max(0.03, Math.abs(baseScore) * 0.5);
-      const retainedFraction = Math.abs(baseMetrics.netReturn) > 0.000001 ? metrics.netReturn / baseMetrics.netReturn : null;
-      points.push({ parameterId: selection.id, direction, value: bounded, metrics, retainedFraction, passed: metrics.tradeCount >= 1 && score >= baseScore - tolerance });
+      requests.push(windowRequest(perturbedSource, developmentBars.length, config, window));
+      points.push({ parameterId: selection.id, direction, value: bounded });
     }
   }
+  return { requests, points };
+}
+
+function buildSensitivity(
+  plan: SensitivityPlan,
+  metrics: OptimizationMetrics[],
+  objective: OptimizationObjective,
+): RobustnessGate["sensitivity"] {
+  const baseMetrics = metrics[0]!;
+  const baseScore = optimizationScore(baseMetrics, baseMetrics, objective);
+  const points: SensitivityPoint[] = plan.points.map((point, index) => {
+    const pointMetrics = metrics[index + 1]!;
+    const score = optimizationScore(pointMetrics, pointMetrics, objective);
+    const tolerance = Math.max(0.03, Math.abs(baseScore) * 0.5);
+    const retainedFraction = Math.abs(baseMetrics.netReturn) > 0.000001 ? pointMetrics.netReturn / baseMetrics.netReturn : null;
+    return { ...point, metrics: pointMetrics, retainedFraction, passed: pointMetrics.tradeCount >= 1 && score >= baseScore - tolerance };
+  });
   const stablePoints = points.filter((point) => point.passed).length;
   return { passed: points.length > 0 && stablePoints >= Math.ceil(points.length * 0.6), stablePoints, totalPoints: points.length, points };
 }
 
-async function costStressEvidence(
+interface CostStressPlan {
+  requests: WindowRequest[];
+  scenarios: Array<{ id: CostStressPoint["id"]; label: string; fee: number; slippage: number }>;
+}
+
+function planCostStress(
   candidateSource: string,
   developmentBars: MarketBar[],
   evaluationStartIndex: number,
   config: BacktestConfig,
-): Promise<RobustnessGate["costStress"]> {
-  const scenarios: Array<{ id: CostStressPoint["id"]; label: string; fee: number; slippage: number }> = [
+): CostStressPlan {
+  const scenarios: CostStressPlan["scenarios"] = [
     { id: "base", label: "当前成本", fee: config.takerFeeRate, slippage: config.slippageBps },
     { id: "double", label: "双倍成本", fee: Math.min(0.01, config.takerFeeRate * 2), slippage: Math.min(100, config.slippageBps * 2) },
     { id: "severe", label: "严重冲击", fee: Math.min(0.01, config.takerFeeRate * 3), slippage: Math.min(100, Math.max(config.slippageBps * 3, config.slippageBps + 5)) },
   ];
-  const raw = await Promise.all(scenarios.map(async (scenario) => ({
-    scenario,
-    metrics: await runProgramWindow(candidateSource, developmentBars, { ...config, takerFeeRate: scenario.fee, slippageBps: scenario.slippage }, { startIndex: evaluationStartIndex, endIndex: developmentBars.length }),
-  })));
-  const base = raw[0]!.metrics;
-  const points = raw.map(({ scenario, metrics }) => {
+  const window = { startIndex: evaluationStartIndex, endIndex: developmentBars.length };
+  return {
+    scenarios,
+    requests: scenarios.map((scenario) => windowRequest(
+      candidateSource,
+      developmentBars.length,
+      { ...config, takerFeeRate: scenario.fee, slippageBps: scenario.slippage },
+      window,
+    )),
+  };
+}
+
+function buildCostStress(plan: CostStressPlan, metrics: OptimizationMetrics[]): RobustnessGate["costStress"] {
+  const base = metrics[0]!;
+  const points = plan.scenarios.map((scenario, index) => {
+    const scenarioMetrics = metrics[index]!;
     const allowedReturnLoss = Math.max(0.05, Math.abs(base.netReturn) * 1.5);
     return {
       id: scenario.id,
       label: scenario.label,
       takerFeeRate: scenario.fee,
       slippageBps: scenario.slippage,
-      metrics,
-      passed: metrics.tradeCount >= 1 && metrics.netReturn >= base.netReturn - allowedReturnLoss && metrics.maximumDrawdown >= base.maximumDrawdown - 0.1,
+      metrics: scenarioMetrics,
+      passed: scenarioMetrics.tradeCount >= 1
+        && scenarioMetrics.netReturn >= base.netReturn - allowedReturnLoss
+        && scenarioMetrics.maximumDrawdown >= base.maximumDrawdown - 0.1,
     };
   });
   return { passed: points.every((point) => point.passed), points };
@@ -316,11 +361,24 @@ async function buildRobustnessGate(
   objective: OptimizationObjective,
   trialCount: number,
   improved: boolean,
+  pool: EvaluationPool,
 ): Promise<RobustnessGate> {
   const candidateSource = applyParametersToSource(baseSource, contract, definitions, candidateValues);
-  const walkForward = await walkForwardEvidence(baseSource, candidateSource, developmentBars, config);
-  const sensitivity = await sensitivityEvidence(baseSource, contract, definitions, candidateValues, selections, developmentBars, evaluationStartIndex, config, objective);
-  const costStress = await costStressEvidence(candidateSource, developmentBars, evaluationStartIndex, config);
+  const walkForwardPlan = planWalkForward(baseSource, candidateSource, developmentBars, config);
+  const sensitivityPlan = planSensitivity(baseSource, contract, definitions, candidateValues, selections, developmentBars, evaluationStartIndex, config);
+  const costStressPlan = planCostStress(candidateSource, developmentBars, evaluationStartIndex, config);
+
+  // The three checks are independent of one another, so they queue as a single
+  // batch and keep every worker busy to the end of the gate.
+  const metrics = await pool.evaluate([...walkForwardPlan.requests, ...sensitivityPlan.requests, ...costStressPlan.requests]);
+  const sensitivityStart = walkForwardPlan.requests.length;
+  const costStressStart = sensitivityStart + sensitivityPlan.requests.length;
+  const walkForward = buildWalkForward(walkForwardPlan, metrics.slice(0, sensitivityStart));
+  const sensitivity = buildSensitivity(sensitivityPlan, metrics.slice(sensitivityStart, costStressStart), objective);
+  const costStress = buildCostStress(costStressPlan, metrics.slice(costStressStart));
+
+  // Kept in-process: the regime breakdown needs the trade list, not the summary
+  // metrics a pool request returns.
   const validationResult = await runBacktest(candidateSource, developmentBars, { ...config, evaluationStartTime: developmentBars[evaluationStartIndex]!.timestamp });
   const regimes = regimeEvidence(validationResult, developmentBars.slice(evaluationStartIndex));
   const sharpe = calculateBacktestMetrics(validationResult).sharpe;
@@ -373,42 +431,64 @@ export async function runParameterOptimization(input: OptimizationInput): Promis
   const semanticLockHash = await sha256Text(semanticSkeleton(contract));
   const candidates = generateParameterCandidates(definitions, selections, maximumTrials);
 
-  const trials: OptimizationTrial[] = [];
-  for (let index = 0; index < candidates.length; index += 1) {
-    const parameters = candidates[index]!;
+  // Every trial is two independent windows of the same bar series, so the whole
+  // sweep is planned up front and evaluated as one batch. Metrics come back
+  // positionally, which is what keeps a parallel run indistinguishable from a
+  // sequential one: trial numbering, the Pareto set and the tie-break that picks
+  // the challenger all depend on this order, not on which window finished first.
+  const trialRequests = candidates.flatMap((parameters) => {
     const candidateSource = applyParametersToSource(source, contract, definitions, parameters);
-    const train = await runProgramWindow(candidateSource, trainBars, config);
-    const validation = await runProgramWindow(candidateSource, developmentBars, config, { startIndex: splitIndex, endIndex: developmentBars.length });
-    trials.push({
-      id: `T${String(index + 1).padStart(2, "0")}`,
-      parameters,
-      train,
-      validation,
-      score: optimizationScore(train, validation, objective),
-      pareto: false,
-      isBaseline: index === 0,
-    });
-  }
-  markPareto(trials);
-  const baseline = trials[0]!;
-  const ranked = [...trials].sort((left, right) => right.score - left.score);
-  const challenger = ranked.find((trial) => !trial.isBaseline && trial.validation.tradeCount >= 2);
-  const improved = Boolean(challenger && challenger.score > baseline.score + 0.005);
-  const recommended = improved ? challenger! : baseline;
+    return [
+      windowRequest(candidateSource, trainBars.length, config),
+      windowRequest(candidateSource, developmentBars.length, config, { startIndex: splitIndex, endIndex: developmentBars.length }),
+    ];
+  });
 
-  const robustness = await buildRobustnessGate(
-    source,
-    contract,
-    definitions,
-    recommended.parameters,
-    selections,
-    developmentBars,
-    splitIndex,
-    config,
-    objective,
-    trials.length,
-    improved,
-  );
+  const pool = await createEvaluationPool(developmentBars, trialRequests);
+  let trials: OptimizationTrial[];
+  let recommended: OptimizationTrial;
+  let baseline: OptimizationTrial;
+  let improved: boolean;
+  let robustness: RobustnessGate;
+  try {
+    const trialMetrics = await pool.evaluate(trialRequests);
+    trials = candidates.map((parameters, index) => {
+      const train = trialMetrics[index * 2]!;
+      const validation = trialMetrics[index * 2 + 1]!;
+      return {
+        id: `T${String(index + 1).padStart(2, "0")}`,
+        parameters,
+        train,
+        validation,
+        score: optimizationScore(train, validation, objective),
+        pareto: false,
+        isBaseline: index === 0,
+      };
+    });
+    markPareto(trials);
+    baseline = trials[0]!;
+    const ranked = [...trials].sort((left, right) => right.score - left.score);
+    const challenger = ranked.find((trial) => !trial.isBaseline && trial.validation.tradeCount >= 2);
+    improved = Boolean(challenger && challenger.score > baseline.score + 0.005);
+    recommended = improved ? challenger! : baseline;
+
+    robustness = await buildRobustnessGate(
+      source,
+      contract,
+      definitions,
+      recommended.parameters,
+      selections,
+      developmentBars,
+      splitIndex,
+      config,
+      objective,
+      trials.length,
+      improved,
+      pool,
+    );
+  } finally {
+    await pool.dispose();
+  }
 
   return {
     schemaVersion: "optimization-2.0",

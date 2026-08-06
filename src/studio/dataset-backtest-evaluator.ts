@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
+import { TIMEFRAMES } from "../core/timeframes.js";
 import { aggregateOneMinuteBars, type AggregateInterval } from "../data/aggregate-bars.js";
 import { loadHistoricalDataset } from "../data/historical-dataset.js";
 import { loadMarketSnapshot } from "../data/market-snapshot.js";
@@ -34,7 +35,7 @@ export class DatasetBacktestEvaluator implements StrategyEvaluator {
     const aggregation = aggregateOneMinuteBars(oneMinuteBars, this.interval);
     if (aggregation.bars.length < 2) throw new Error(`Not enough complete ${this.interval} bars in the dataset.`);
     const timeframeBars = Object.fromEntries(
-      (["1m", "15m", "1h", "4h"] as const).map((interval) => [
+      TIMEFRAMES.map((interval) => [
         interval,
         aggregateOneMinuteBars(oneMinuteBars, interval).bars,
       ]),

@@ -209,7 +209,7 @@ export const en: Messages = {
     ranges: {
       "3d": "Last 3 days", "7d": "Last 7 days", "30d": "Last 30 days",
       "60d": "Last 2 months", "90d": "Last 3 months", "180d": "Last 6 months",
-      "365d": "Last year", "1095d": "Last 3 years",
+      "365d": "Last year", "1095d": "Last 3 years", "1825d": "Last 5 years", "2555d": "Last 7 years",
     } as Record<string, string>,
     startDate: "Start date",
     endDate: "End date",
@@ -553,7 +553,7 @@ export const en: Messages = {
   contract: {
     timeframeFallback: "the selected timeframe",
     timeframeSuffix: (label: string) => `${label} candles`,
-    timeframes: { "1m": "1-minute", "15m": "15-minute", "1h": "1-hour", "4h": "4-hour" } as Record<string, string>,
+    timeframes: { "1m": "1-minute", "15m": "15-minute", "1h": "1-hour", "4h": "4-hour", "1d": "daily", "1w": "weekly" } as Record<string, string>,
     fields: { open: "open", high: "high", low: "low", close: "close", volume: "volume" } as Record<string, string>,
     comparisons: { ">": "is above", ">=": "is at least", "<": "is below", "<=": "is at most", "==": "equals" } as Record<string, string>,
     positions: { flat: "currently flat", long: "currently long", short: "currently short" } as Record<string, string>,

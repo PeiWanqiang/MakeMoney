@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { emaFundingStrategy, emaTrendStrategy } from "../examples/strategies.js";
+import { isTimeframe } from "../src/core/timeframes.js";
 import type { BacktestConfig, BacktestResult, ClosedTrade, EquityPoint } from "../src/core/types.js";
 import { aggregateOneMinuteBars, type AggregateInterval } from "../src/data/aggregate-bars.js";
 import { loadHistoricalDataset } from "../src/data/historical-dataset.js";
@@ -131,7 +132,7 @@ function compareEquity(authoritative: EquityPoint[], reference: EquityPoint[]): 
 const catalogArgument = process.argv[2] ?? "data/history/binance-usdm/BTCUSDT-PERP/1m/dataset.catalog.json";
 const interval = (process.argv[3] ?? "4h") as AggregateInterval;
 const strategyName = process.argv[4] ?? "funding";
-if (!(["1m", "15m", "1h", "4h"] as string[]).includes(interval)) throw new Error(`Unsupported interval '${interval}'.`);
+if (!isTimeframe(interval)) throw new Error(`Unsupported interval '${interval}'.`);
 const spec = specs[strategyName as keyof typeof specs];
 if (!spec) throw new Error(`Unsupported strategy '${strategyName}'. Use trend or funding.`);
 

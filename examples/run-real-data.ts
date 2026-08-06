@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { emaFundingStrategy, emaTrendStrategy } from "./strategies.js";
+import { isTimeframe } from "../src/core/timeframes.js";
 import { aggregateOneMinuteBars, type AggregateInterval } from "../src/data/aggregate-bars.js";
 import { loadHistoricalDataset } from "../src/data/historical-dataset.js";
 import { loadMarketSnapshot } from "../src/data/market-snapshot.js";
@@ -14,10 +15,10 @@ const interval = (process.argv[3] ?? "4h") as AggregateInterval;
 const strategyName = process.argv[4] ?? "trend";
 if (!manifestArgument) {
   throw new Error(
-    "Usage: npm run backtest:real -- /absolute/path/to/snapshot.manifest.json-or-dataset.catalog.json [15m|1h|4h] [trend|funding]",
+    "Usage: npm run backtest:real -- /absolute/path/to/snapshot.manifest.json-or-dataset.catalog.json [15m|1h|4h|1d|1w] [trend|funding]",
   );
 }
-if (!(["1m", "15m", "1h", "4h"] as string[]).includes(interval)) throw new Error(`Unsupported interval '${interval}'.`);
+if (!isTimeframe(interval)) throw new Error(`Unsupported interval '${interval}'.`);
 const strategies: Record<string, string> = { trend: emaTrendStrategy, funding: emaFundingStrategy };
 const strategySource = strategies[strategyName];
 if (!strategySource) throw new Error(`Unsupported strategy '${strategyName}'. Use trend or funding.`);

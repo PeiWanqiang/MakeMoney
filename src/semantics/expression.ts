@@ -16,6 +16,8 @@
  * callers needing only evaluation do not pull in the TypeScript compiler.
  */
 
+import { TIMEFRAME_PATTERN } from "../core/timeframes.js";
+
 /** Indicator names that may appear as canonical operands. */
 export const INDICATOR_NAMES = [
   "sma", "ema", "highest", "lowest", "percentChange",
@@ -23,7 +25,7 @@ export const INDICATOR_NAMES = [
 ] as const;
 
 const INDICATOR_PATTERN = new RegExp(
-  `^(?:timeframe\\("(?:1m|15m|1h|4h)"\\)\\.)?(?:${INDICATOR_NAMES.join("|")})\\(`,
+  `^(?:timeframe\\("(?:${TIMEFRAME_PATTERN})"\\)\\.)?(?:${INDICATOR_NAMES.join("|")})\\(`,
 );
 
 /** Values a canonical expression can read while being evaluated. */

@@ -28,35 +28,64 @@ export class StrategyCompilationError extends Error {
 const GENERATED_FILE = "/generated.strategy.ts";
 const SDK_FILE = "/strategy-sdk.d.ts";
 
+const COMPILER_OPTIONS: ts.CompilerOptions = {
+  target: ts.ScriptTarget.ES2020,
+  module: ts.ModuleKind.NodeNext,
+  moduleResolution: ts.ModuleResolutionKind.NodeNext,
+  strict: true,
+  noEmit: true,
+  noUncheckedIndexedAccess: true,
+  exactOptionalPropertyTypes: true,
+  skipLibCheck: true,
+};
+
+/**
+ * The compiler host is built once and keeps the files it has already parsed.
+ *
+ * `ts.createCompilerHost` reads and parses the whole default library from disk,
+ * and that alone was about 75ms of the 80ms a compilation cost — paid again for
+ * every program variant a parameter sweep produces. Every file except the
+ * strategy under compilation is immutable input, so it is parsed once and
+ * reused. The strategy file is still re-read and re-parsed on each call, and
+ * each call still builds its own `ts.Program` and asks it for diagnostics from
+ * scratch, so what a source is checked against has not changed.
+ *
+ * `pendingSource` is safe as shared state only because `compileStrategySource`
+ * is synchronous: `createProgram` reads it back before any other caller can run.
+ */
+let sharedHost: ts.CompilerHost | null = null;
+let pendingSource = "";
+
+function compilerHost(): ts.CompilerHost {
+  if (sharedHost) return sharedHost;
+  const base = ts.createCompilerHost(COMPILER_OPTIONS, true);
+  const parsed = new Map<string, ts.SourceFile | undefined>();
+  sharedHost = {
+    ...base,
+    fileExists: (fileName) => fileName === GENERATED_FILE || fileName === SDK_FILE || base.fileExists(fileName),
+    readFile: (fileName) => {
+      if (fileName === GENERATED_FILE) return pendingSource;
+      if (fileName === SDK_FILE) return STRATEGY_SDK_DECLARATION;
+      return base.readFile(fileName);
+    },
+    getSourceFile: (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
+      if (fileName === GENERATED_FILE) return ts.createSourceFile(fileName, pendingSource, languageVersion, true);
+      const target = typeof languageVersion === "object" ? languageVersion.languageVersion : languageVersion;
+      const key = `${fileName}:${target}`;
+      if (!parsed.has(key)) {
+        parsed.set(key, fileName === SDK_FILE
+          ? ts.createSourceFile(fileName, STRATEGY_SDK_DECLARATION, languageVersion, true)
+          : base.getSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile));
+      }
+      return parsed.get(key);
+    },
+  };
+  return sharedHost;
+}
+
 function typeScriptDiagnostics(source: string): SourceDiagnostic[] {
-  const options: ts.CompilerOptions = {
-    target: ts.ScriptTarget.ES2020,
-    module: ts.ModuleKind.NodeNext,
-    moduleResolution: ts.ModuleResolutionKind.NodeNext,
-    strict: true,
-    noEmit: true,
-    noUncheckedIndexedAccess: true,
-    exactOptionalPropertyTypes: true,
-    skipLibCheck: true,
-  };
-  const host = ts.createCompilerHost(options, true);
-  const originalFileExists = host.fileExists.bind(host);
-  const originalReadFile = host.readFile.bind(host);
-  const originalGetSourceFile = host.getSourceFile.bind(host);
-  const virtualFiles = new Map([
-    [GENERATED_FILE, source],
-    [SDK_FILE, STRATEGY_SDK_DECLARATION],
-  ]);
-
-  host.fileExists = (fileName) => virtualFiles.has(fileName) || originalFileExists(fileName);
-  host.readFile = (fileName) => virtualFiles.get(fileName) ?? originalReadFile(fileName);
-  host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
-    const text = virtualFiles.get(fileName);
-    if (text !== undefined) return ts.createSourceFile(fileName, text, languageVersion, true);
-    return originalGetSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile);
-  };
-
-  const program = ts.createProgram([GENERATED_FILE, SDK_FILE], options, host);
+  pendingSource = source;
+  const program = ts.createProgram([GENERATED_FILE, SDK_FILE], COMPILER_OPTIONS, compilerHost());
   return ts
     .getPreEmitDiagnostics(program)
     .filter((item) => item.file?.fileName === GENERATED_FILE)
@@ -96,7 +125,29 @@ function transpile(source: string): string {
     .replaceAll("\r\n", "\n");
 }
 
+/**
+ * Compilation is a pure function of the source text, and `typeScriptDiagnostics`
+ * builds a whole TypeScript program — including reading the real lib files from
+ * disk — which measures around 80ms per call. A parameter sweep re-compiles the
+ * same handful of program variants dozens of times (every `runBacktest` compiles
+ * afresh), so the results are memoized on the source text.
+ *
+ * Only successful compilations are cached: a rejected source aborts whatever
+ * asked for it, so there is no hot path to protect, and reusing one error
+ * instance would hand every caller the same stale stack.
+ */
+const compilationCache = new Map<string, CompiledStrategyProgram>();
+const COMPILATION_CACHE_LIMIT = 256;
+
 export function compileStrategySource(source: string): CompiledStrategyProgram {
+  const cached = compilationCache.get(source);
+  if (cached) {
+    // Re-insert so the eviction below drops the least recently used entry.
+    compilationCache.delete(source);
+    compilationCache.set(source, cached);
+    return cached;
+  }
+
   const validation = validateStrategySource(source);
   if (!validation.ok) {
     throw new StrategyCompilationError("source-validation", validation.diagnostics);
@@ -109,5 +160,13 @@ export function compileStrategySource(source: string): CompiledStrategyProgram {
 
   const javascript = transpile(source);
   const sourceHash = createHash("sha256").update(javascript).digest("hex");
-  return { source, javascript, sourceHash };
+  // The instance is shared by every caller from here on, so it is frozen rather
+  // than trusting each of them to treat it as read-only.
+  const program: CompiledStrategyProgram = Object.freeze({ source, javascript, sourceHash });
+  compilationCache.set(source, program);
+  if (compilationCache.size > COMPILATION_CACHE_LIMIT) {
+    const oldest = compilationCache.keys().next();
+    if (!oldest.done) compilationCache.delete(oldest.value);
+  }
+  return program;
 }

@@ -138,7 +138,6 @@ export default function UnderstandingPanel({
       <div className="result-content">
         <div className="result-head">
           <span className="result-seal">{copy.seal[artifact.status]}</span>
-          <h3>{copy.title[artifact.status]}</h3>
           <p>{copy.detail[artifact.status]}</p>
         </div>
 

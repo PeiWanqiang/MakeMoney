@@ -1,4 +1,5 @@
 import { compileStrategySource } from "../compiler/compile-strategy-source.js";
+import { TIMEFRAME_PATTERN, type Timeframe } from "../core/timeframes.js";
 import type { RuntimePosition, StrategyDecision } from "../core/types.js";
 import { StrategySandboxSession, type StrategySemanticScenario } from "../runtime/sandbox.js";
 import {
@@ -170,12 +171,14 @@ function compactOperand(value: string): string {
   return result;
 }
 
+const TIMEFRAME_OPERAND_PATTERN = new RegExp(`^timeframe\\("(${TIMEFRAME_PATTERN})"\\)\\.(.+)$`);
+
 function setOperand(scenario: StrategySemanticScenario, rawOperand: string, value: number | string): void {
   const operand = compactOperand(rawOperand);
-  const timeframe = /^timeframe\("(1m|15m|1h|4h)"\)\.(.+)$/.exec(operand);
+  const timeframe = TIMEFRAME_OPERAND_PATTERN.exec(operand);
   if (timeframe) {
     scenario.timeframes ??= {};
-    const interval = timeframe[1] as "1m" | "15m" | "1h" | "4h";
+    const interval = timeframe[1] as Timeframe;
     const frame = scenario.timeframes[interval] ?? { market: {}, indicators: {} };
     const nested: StrategySemanticScenario = {
       ...(frame.market === undefined ? {} : { market: frame.market }),
@@ -367,7 +370,10 @@ function decisionsAgree(contracted: ContractDecision, actual: ContractDecision, 
  */
 function indicatorOperands(contract: StrategyContract, programOperands: string[]): string[] {
   const operands = new Set<string>(programOperands);
-  const pattern = /(?:timeframe\("(?:1m|15m|1h|4h)"\)\.)?(?:sma|ema|highest|lowest|percentChange|standardDeviation|rsi|atr|macd|bollingerBands)\([^)]*\)(?:\.(?:macd|signal|histogram|middle|upper|lower))?/g;
+  const pattern = new RegExp(
+    `(?:timeframe\\("(?:${TIMEFRAME_PATTERN})"\\)\\.)?(?:sma|ema|highest|lowest|percentChange|standardDeviation|rsi|atr|macd|bollingerBands)\\([^)]*\\)(?:\\.(?:macd|signal|histogram|middle|upper|lower))?`,
+    "g",
+  );
   const scan = (text: string): void => {
     for (const match of text.matchAll(pattern)) operands.add(match[0]);
   };

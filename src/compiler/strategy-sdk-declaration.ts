@@ -73,7 +73,7 @@ interface StrategyContext {
       quoteVolume: number | null; takerBuyBaseVolume: number | null; takerBuyQuoteVolume: number | null;
     }[] | null;
   };
-  timeframe(interval: "1m" | "15m" | "1h" | "4h"): Pick<StrategyContext, "market" | "indicators" | "history"> | null;
+  timeframe(interval: "1m" | "15m" | "1h" | "4h" | "1d" | "1w"): Pick<StrategyContext, "market" | "indicators" | "history"> | null;
   readonly state: {
     get<T extends JsonValue>(key: string, fallback: T): T;
     get(key: string): JsonValue | undefined;

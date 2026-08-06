@@ -1,3 +1,4 @@
+import type { Timeframe } from "../core/timeframes.js";
 import type { BacktestConfig, ClosedTrade, EquityPoint, StrategyState } from "../core/types.js";
 import type { BacktestMetrics } from "../runtime/backtest-metrics.js";
 
@@ -23,7 +24,7 @@ export interface ServiceBar {
   takerBuyQuoteVolume?: number;
 }
 
-export type ServiceTimeframe = "1m" | "15m" | "1h" | "4h";
+export type ServiceTimeframe = Timeframe;
 
 /** Multi-timeframe context mirrors `BacktestTimeframeContext` on the wire. */
 export interface ServiceTimeframeContext {

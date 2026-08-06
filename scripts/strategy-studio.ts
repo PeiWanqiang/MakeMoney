@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 
+import { isTimeframe } from "../src/core/timeframes.js";
 import { DatasetBacktestEvaluator } from "../src/studio/dataset-backtest-evaluator.js";
 import { DeepSeekStrategyProgramProvider } from "../src/studio/deepseek-provider.js";
 import { OpenAIStrategyProgramProvider } from "../src/studio/openai-provider.js";
@@ -35,8 +36,8 @@ function stringOption(options: Arguments, key: string, required = false): string
 
 function usage(): never {
   throw new Error(`Usage:
-  npm run strategy:studio -- new --intent "..." [--session ID] [--dataset PATH] [--interval 1m|15m|1h|4h]
-  npm run strategy:studio -- revise --session ID --intent "..." [--dataset PATH] [--interval 1m|15m|1h|4h]
+  npm run strategy:studio -- new --intent "..." [--session ID] [--dataset PATH] [--interval 1m|15m|1h|4h|1d|1w]
+  npm run strategy:studio -- revise --session ID --intent "..." [--dataset PATH] [--interval 1m|15m|1h|4h|1d|1w]
   npm run strategy:studio -- show --session ID [--version ID]
 
 Default provider: deepseek. Set DEEPSEEK_API_KEY in the environment.
@@ -62,13 +63,13 @@ if (command !== "new" && command !== "revise") usage();
 const intent = stringOption(options, "intent", true) as string;
 const dataset = stringOption(options, "dataset");
 const interval = stringOption(options, "interval") ?? "4h";
-if (!(["1m", "15m", "1h", "4h"] as string[]).includes(interval)) {
+if (!isTimeframe(interval)) {
   throw new Error(`Unsupported interval '${interval}'.`);
 }
 const evaluator = dataset
   ? new DatasetBacktestEvaluator({
       datasetPath: resolve(dataset),
-      interval: interval as "1m" | "15m" | "1h" | "4h",
+      interval,
     })
   : undefined;
 const requestedModel = stringOption(options, "model");

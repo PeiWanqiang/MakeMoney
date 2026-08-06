@@ -1,3 +1,4 @@
+import { isTimeframe, TIMEFRAMES } from "../core/timeframes.js";
 import type { StrategyModelArtifact } from "./types.js";
 import { normalizeCloseFraction } from "../semantics/contract.js";
 import type { ContractDecision, ContractRule, ContractTimeframe, StrategyContract } from "../semantics/contract.js";
@@ -13,7 +14,7 @@ export const STRATEGY_OUTPUT_SCHEMA = {
       additionalProperties: false,
       properties: {
         schemaVersion: { type: "string", enum: ["1.0"] },
-        timeframe: { type: "string", enum: ["1m", "15m", "1h", "4h"] },
+        timeframe: { type: "string", enum: [...TIMEFRAMES] },
         rules: {
           type: "array",
           items: {
@@ -72,7 +73,7 @@ export function parseStrategyModelArtifact(text: string): StrategyModelArtifact 
   const contract = artifact.contract as Record<string, unknown> | undefined;
   if (
     !contract || contract.schemaVersion !== "1.0" ||
-    !(["1m", "15m", "1h", "4h"] as unknown[]).includes(contract.timeframe) ||
+    !isTimeframe(contract.timeframe) ||
     !Array.isArray(contract.rules) || !Array.isArray(contract.unsupportedCapabilities)
   ) {
     throw new Error("The model response has an invalid strategy contract.");

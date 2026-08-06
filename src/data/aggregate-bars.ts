@@ -1,13 +1,9 @@
+import { TIMEFRAME_MS, type Timeframe, timeframeBucketStart } from "../core/timeframes.js";
 import type { MarketBar } from "../core/types.js";
 
-export const AGGREGATE_INTERVALS = {
-  "1m": 60_000,
-  "15m": 15 * 60_000,
-  "1h": 60 * 60_000,
-  "4h": 4 * 60 * 60_000,
-} as const;
+export const AGGREGATE_INTERVALS = TIMEFRAME_MS;
 
-export type AggregateInterval = keyof typeof AGGREGATE_INTERVALS;
+export type AggregateInterval = Timeframe;
 
 export interface AggregationResult {
   bars: MarketBar[];
@@ -22,7 +18,7 @@ export function aggregateOneMinuteBars(source: MarketBar[], interval: AggregateI
 
   const buckets = new Map<number, MarketBar[]>();
   for (const bar of [...source].sort((a, b) => a.timestamp - b.timestamp)) {
-    const bucketTimestamp = Math.floor(bar.timestamp / targetMs) * targetMs;
+    const bucketTimestamp = timeframeBucketStart(bar.timestamp, interval);
     const bucket = buckets.get(bucketTimestamp) ?? [];
     bucket.push(bar);
     buckets.set(bucketTimestamp, bucket);

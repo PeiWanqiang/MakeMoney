@@ -20,7 +20,10 @@ export interface BacktestEnv {
   BACKTEST_SHADOW_MODE?: string;
 }
 
-type Timeframe = "1m" | "15m" | "1h" | "4h";
+type Timeframe = "1m" | "15m" | "1h" | "4h" | "1d" | "1w";
+
+const TIMEFRAMES: readonly Timeframe[] = ["1m", "15m", "1h", "4h", "1d", "1w"];
+
 type PositionSide = "flat" | "long" | "short";
 
 interface Bar {
@@ -245,7 +248,31 @@ const TIMEFRAME_MS: Record<Timeframe, number> = {
   "15m": 15 * 60_000,
   "1h": 60 * 60_000,
   "4h": 4 * 60 * 60_000,
+  "1d": 24 * 60 * 60_000,
+  "1w": 7 * 24 * 60 * 60_000,
 };
+
+/** Alternation body for the timeframe-prefix regexes below. */
+const TIMEFRAME_PATTERN = TIMEFRAMES.join("|");
+
+/**
+ * Weekly bars open on Monday, not on the epoch.
+ *
+ * `floor(ts / week)` anchors to 1970-01-01, a Thursday, so aggregated weeks
+ * would straddle two of the weeks Binance serves natively on `interval=1w` —
+ * the same strategy would see different highs and lows depending on whether 1w
+ * was its own timeframe or one it read through `timeframe("1w")`. Monday
+ * 1970-01-05 00:00 UTC sits 345,600,000 ms in; shifting the grid by that lines
+ * the two up. Every shorter interval divides the UTC day evenly and already
+ * matches. Mirrors `timeframeBucketStart` in src/core/timeframes.ts.
+ */
+const WEEK_ANCHOR_MS = 4 * 24 * 60 * 60_000;
+
+function bucketStart(timestamp: number, timeframe: Timeframe): number {
+  const interval = TIMEFRAME_MS[timeframe];
+  if (timeframe !== "1w") return Math.floor(timestamp / interval) * interval;
+  return Math.floor((timestamp - WEEK_ANCHOR_MS) / interval) * interval + WEEK_ANCHOR_MS;
+}
 
 const MAX_BARS = 10_000;
 const KLINE_CACHE_VERSION = "klines-v1";
@@ -471,7 +498,7 @@ function findArithmeticOperator(value: string, operators: ReadonlySet<string>): 
 }
 
 function parseTimeframe(value: unknown): Timeframe {
-  if (value === "1m" || value === "15m" || value === "1h" || value === "4h") return value;
+  if (TIMEFRAMES.includes(value as Timeframe)) return value as Timeframe;
   throw new Error("策略周期不受回测引擎支持");
 }
 
@@ -854,7 +881,7 @@ function finishBars(bars: Bar[], timeframe: Timeframe, endTime: number): Bar[] {
 async function fetchBinanceRestBars(asset: string, market: string, timeframe: Timeframe, startTime: number, endTime: number): Promise<Bar[]> {
   const path = market === "Binance Spot" ? "https://data-api.binance.vision/api/v3/klines" : "https://fapi.binance.com/fapi/v1/klines";
   const bars: Bar[] = [];
-  let cursor = Math.floor(startTime / TIMEFRAME_MS[timeframe]) * TIMEFRAME_MS[timeframe];
+  let cursor = bucketStart(startTime, timeframe);
   while (cursor <= endTime && bars.length < MAX_BARS) {
     const url = new URL(path);
     url.searchParams.set("symbol", asset);
@@ -921,11 +948,38 @@ function compactBars(bars: Bar[]): number[][] {
  * `end` rounds out to the close of the bar containing it because that bar was
  * already included. Only the cache key changes; the result does not.
  */
+const TIMEFRAME_PREFIX_PATTERN = new RegExp(`timeframe\\("(${TIMEFRAME_PATTERN})"\\)`, "g");
+const TIMEFRAME_OPERAND_PATTERN = new RegExp(`^timeframe\\("(${TIMEFRAME_PATTERN})"\\)\\.(.+)$`);
+
+/**
+ * How far back an unbounded request reaches, in days of history.
+ *
+ * Scaled so the default window carries a usable number of bars at either end of
+ * the range: three days of 1m bars is already 4,320, while a year of weekly
+ * bars is 52 — too few to say anything about a strategy, and fewer still once
+ * a 20-period indicator has eaten its warm-up.
+ */
+const DEFAULT_WINDOW_DAYS: Record<Timeframe, number> = {
+  "1m": 3,
+  "15m": 60,
+  "1h": 365,
+  "4h": 365,
+  "1d": 1095,
+  "1w": 2555,
+};
+
+function defaultWindowMs(timeframe: Timeframe): number {
+  return DEFAULT_WINDOW_DAYS[timeframe] * 24 * 60 * 60 * 1000;
+}
+
 function alignWindow(startTime: number, endTime: number, timeframe: Timeframe): { startTime: number; endTime: number } {
   const interval = TIMEFRAME_MS[timeframe];
+  const firstOpen = bucketStart(startTime, timeframe);
   return {
-    startTime: Math.ceil(startTime / interval) * interval,
-    endTime: Math.floor(endTime / interval) * interval + interval - 1,
+    // Rounds up through the same grid the bars sit on, which for 1w is the
+    // Monday grid rather than the epoch one.
+    startTime: firstOpen === startTime ? firstOpen : firstOpen + interval,
+    endTime: bucketStart(endTime, timeframe) + interval - 1,
   };
 }
 
@@ -1083,7 +1137,7 @@ function aggregateBars(source: Bar[], sourceTimeframe: Timeframe, targetTimefram
   const expected = targetMs / sourceMs;
   const groups = new Map<number, Bar[]>();
   for (const bar of source) {
-    const bucket = Math.floor(bar.timestamp / targetMs) * targetMs;
+    const bucket = bucketStart(bar.timestamp, targetTimeframe);
     const rows = groups.get(bucket) ?? [];
     rows.push(bar);
     groups.set(bucket, rows);
@@ -1105,7 +1159,7 @@ function referencedTimeframes(contract: StrategyContract): Timeframe[] {
   const found = new Set<Timeframe>([contract.timeframe]);
   for (const rule of contract.rules) {
     for (const condition of rule.when) {
-      for (const match of condition.matchAll(/timeframe\("(1m|15m|1h|4h)"\)/g)) found.add(match[1] as Timeframe);
+      for (const match of condition.matchAll(TIMEFRAME_PREFIX_PATTERN)) found.add(match[1] as Timeframe);
       if (/market\.(fundingRate|openInterest)/.test(condition)) throw new CodedError("OHLCV_ONLY");
     }
   }
@@ -1284,7 +1338,7 @@ class IndicatorEngine {
       return operand === null ? null : -operand;
     }
     let timeframe = defaultTimeframe;
-    const prefix = /^timeframe\("(1m|15m|1h|4h)"\)\.(.+)$/.exec(value);
+    const prefix = TIMEFRAME_OPERAND_PATTERN.exec(value);
     if (prefix) {
       timeframe = prefix[1] as Timeframe;
       value = prefix[2]!;
@@ -1543,7 +1597,10 @@ const PLOT_ARGUMENT_COUNT: Record<string, number> = {
 
 /** Every indicator reference in a condition, including ones inside arithmetic or a cross. */
 const INDICATOR_REFERENCE =
-  /(?:timeframe\("(1m|15m|1h|4h)"\)\.)?(sma|ema|rsi|highest|lowest|percentChange|atr|bollingerBands|macd)\(([^()]*)\)(?:\.(upper|middle|lower|macd|signal|histogram))?/g;
+  new RegExp(
+    `(?:timeframe\\("(${TIMEFRAME_PATTERN})"\\)\\.)?(sma|ema|rsi|highest|lowest|percentChange|atr|bollingerBands|macd)\\(([^()]*)\\)(?:\\.(upper|middle|lower|macd|signal|histogram))?`,
+    "g",
+  );
 
 /**
  * Bound on the plotted lines. A strategy referencing more than this still runs
@@ -1665,7 +1722,7 @@ function serviceTimeframeContext(contract: StrategyContract, bars: Bar[]): { pri
   const found = new Set<Timeframe>([contract.timeframe]);
   for (const rule of contract.rules) {
     for (const condition of rule.when) {
-      for (const match of condition.matchAll(/timeframe\("(1m|15m|1h|4h)"\)/g)) found.add(match[1] as Timeframe);
+      for (const match of condition.matchAll(TIMEFRAME_PREFIX_PATTERN)) found.add(match[1] as Timeframe);
     }
   }
   const higher = [...found].filter((timeframe) => timeframe !== contract.timeframe);
@@ -1887,7 +1944,7 @@ async function runBacktest(request: Request, env: BacktestEnv, identity: Identit
   if (usingService) assertServiceSupported(source);
   const now = Date.now();
   const requestedEnd = Math.min(now - TIMEFRAME_MS[contract.timeframe], finite(body.endTime, now - TIMEFRAME_MS[contract.timeframe], 1_500_000_000_000, now));
-  const defaultWindow = contract.timeframe === "1m" ? 3 * 24 * 60 * 60 * 1000 : contract.timeframe === "15m" ? 60 * 24 * 60 * 60 * 1000 : 365 * 24 * 60 * 60 * 1000;
+  const defaultWindow = defaultWindowMs(contract.timeframe);
   const requestedStart = finite(body.startTime, requestedEnd - defaultWindow, 1_500_000_000_000, requestedEnd - TIMEFRAME_MS[contract.timeframe]);
   const { startTime, endTime } = alignWindow(requestedStart, requestedEnd, contract.timeframe);
   if ((endTime - startTime) / TIMEFRAME_MS[contract.timeframe] > MAX_BARS) return fail("RANGE_TOO_LARGE", 400, { timeframe: contract.timeframe, maxBars: MAX_BARS.toLocaleString("en-US") });
@@ -2306,7 +2363,7 @@ async function runOptimization(request: Request, env: BacktestEnv, identity: Ide
   const maximumTrials = Math.round(finite(body.maxTrials, 12, 6, MAX_OPTIMIZATION_TRIALS));
   const now = Date.now();
   const requestedEnd = Math.min(now - TIMEFRAME_MS[contract.timeframe], finite(body.endTime, now - TIMEFRAME_MS[contract.timeframe], 1_500_000_000_000, now));
-  const defaultWindow = contract.timeframe === "1m" ? 3 * 24 * 60 * 60 * 1000 : contract.timeframe === "15m" ? 60 * 24 * 60 * 60 * 1000 : 365 * 24 * 60 * 60 * 1000;
+  const defaultWindow = defaultWindowMs(contract.timeframe);
   const requestedStart = finite(body.startTime, requestedEnd - defaultWindow, 1_500_000_000_000, requestedEnd - TIMEFRAME_MS[contract.timeframe]);
   // Aligned for the same reason as a plain backtest, and it matters more here:
   // an experiment id is derived from this window, so a drifting bound would mint

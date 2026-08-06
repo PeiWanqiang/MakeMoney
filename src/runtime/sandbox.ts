@@ -2,10 +2,12 @@ import {
   getQuickJS,
   shouldInterruptAfterDeadline,
   type QuickJSContext,
+  type QuickJSHandle,
   type QuickJSRuntime,
 } from "quickjs-emscripten";
 
-import { compileStrategySource, type CompiledStrategyProgram } from "../compiler/compile-strategy-source.js";
+import type { CompiledStrategyProgram } from "../compiler/compile-strategy-source.js";
+import type { Timeframe } from "../core/timeframes.js";
 import type {
   JsonValue,
   MarketBar,
@@ -17,7 +19,7 @@ import type {
 
 export interface StrategyInvocation {
   bars: MarketBar[];
-  timeframes?: Partial<Record<"1m" | "15m" | "1h" | "4h", MarketBar[]>>;
+  timeframes?: Partial<Record<Timeframe, MarketBar[]>>;
   position: RuntimePosition;
   equity: number;
   state: StrategyState;
@@ -34,7 +36,7 @@ export interface StrategySemanticScenario {
   equity?: number;
   state?: StrategyState;
   indicators?: Record<string, JsonValue>;
-  timeframes?: Partial<Record<"1m" | "15m" | "1h" | "4h", {
+  timeframes?: Partial<Record<Timeframe, {
     market?: Partial<MarketBar>;
     indicators?: Record<string, JsonValue>;
   }>>;
@@ -610,6 +612,8 @@ export class StrategySandboxSession {
     private readonly limits: SandboxLimits,
     private readonly runtime: QuickJSRuntime,
     private readonly context: QuickJSContext,
+    private readonly invokeHandle: QuickJSHandle,
+    private readonly invokeSemanticHandle: QuickJSHandle,
   ) {}
 
   static async create(
@@ -622,13 +626,41 @@ export class StrategySandboxSession {
     runtime.setMaxStackSize(Math.min(512 * 1024, Math.floor(limits.memoryLimitBytes / 4)));
     runtime.setInterruptHandler(shouldInterruptAfterDeadline(Date.now() + limits.timeoutMs));
     const context = runtime.newContext();
+    let invokeHandle: QuickJSHandle | null = null;
+    let invokeSemanticHandle: QuickJSHandle | null = null;
     try {
       context.unwrapResult(context.evalCode(makeSandboxBootstrap(program))).dispose();
-      return new StrategySandboxSession(program, limits, runtime, context);
+      // The entry points are resolved once and retained. Calling through a handle
+      // is what keeps a run linear in real work: passing the payload as an
+      // argument means QuickJS no longer has to lex and compile a fresh
+      // `__invoke("…")` source string, with the whole payload inlined as a string
+      // literal, for every single bar.
+      invokeHandle = context.getProp(context.global, "__invoke");
+      invokeSemanticHandle = context.getProp(context.global, "__invokeSemantic");
+      return new StrategySandboxSession(program, limits, runtime, context, invokeHandle, invokeSemanticHandle);
     } catch (error) {
+      invokeSemanticHandle?.dispose();
+      invokeHandle?.dispose();
       context.dispose();
       runtime.dispose();
       throw error;
+    }
+  }
+
+  /** Calls a retained entry point with its single JSON string argument. */
+  private callEntryPoint(entryPoint: QuickJSHandle, payload: string): string {
+    this.runtime.setInterruptHandler(shouldInterruptAfterDeadline(Date.now() + this.limits.timeoutMs));
+    const argument = this.context.newString(payload);
+    let handle: QuickJSHandle;
+    try {
+      handle = this.context.unwrapResult(this.context.callFunction(entryPoint, this.context.undefined, argument));
+    } finally {
+      argument.dispose();
+    }
+    try {
+      return this.context.getString(handle);
+    } finally {
+      handle.dispose();
     }
   }
 
@@ -657,7 +689,7 @@ export class StrategySandboxSession {
     position: RuntimePosition,
     equity: number,
     state: StrategyState,
-    timeframes: Partial<Record<"1m" | "15m" | "1h" | "4h", MarketBar[]>> = {},
+    timeframes: Partial<Record<Timeframe, MarketBar[]>> = {},
   ): Promise<StrategyProgramResult> {
     if (this.disposed) throw new Error("Strategy sandbox session has been disposed.");
     return this.invoke([bar], position, equity, state, timeframes);
@@ -665,14 +697,8 @@ export class StrategySandboxSession {
 
   async runSemanticScenario(scenario: StrategySemanticScenario): Promise<StrategyProgramResult> {
     if (this.disposed) throw new Error("Strategy sandbox session has been disposed.");
-    this.runtime.setInterruptHandler(shouldInterruptAfterDeadline(Date.now() + this.limits.timeoutMs));
-    const source = `__invokeSemantic(${JSON.stringify(JSON.stringify(scenario))})`;
-    const handle = this.context.unwrapResult(this.context.evalCode(source));
-    try {
-      return parseSandboxResult(this.context.getString(handle), this.program);
-    } finally {
-      handle.dispose();
-    }
+    const raw = this.callEntryPoint(this.invokeSemanticHandle, JSON.stringify(scenario));
+    return parseSandboxResult(raw, this.program);
   }
 
   private invoke(
@@ -680,25 +706,20 @@ export class StrategySandboxSession {
     position: RuntimePosition,
     equity: number,
     state: StrategyState,
-    timeframes: Partial<Record<"1m" | "15m" | "1h" | "4h", MarketBar[]>> = {},
+    timeframes: Partial<Record<Timeframe, MarketBar[]>> = {},
   ): StrategyProgramResult {
-    this.runtime.setInterruptHandler(shouldInterruptAfterDeadline(Date.now() + this.limits.timeoutMs));
     const payload = JSON.stringify({ bars, timeframes, position, equity, state });
-    const source = `__invoke(${JSON.stringify(payload)})`;
-    const handle = this.context.unwrapResult(this.context.evalCode(source));
-    try {
-      const raw = this.context.getString(handle);
-      const result = parseSandboxResult(raw, this.program);
-      this.historyLength += bars.length;
-      return result;
-    } finally {
-      handle.dispose();
-    }
+    const raw = this.callEntryPoint(this.invokeHandle, payload);
+    const result = parseSandboxResult(raw, this.program);
+    this.historyLength += bars.length;
+    return result;
   }
 
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.invokeSemanticHandle.dispose();
+    this.invokeHandle.dispose();
     this.context.dispose();
     this.runtime.dispose();
   }
@@ -709,6 +730,10 @@ export async function runStrategyProgram(
   invocation: StrategyInvocation,
   limits: SandboxLimits = DEFAULT_LIMITS,
 ): Promise<StrategyProgramResult> {
+  // Loaded on demand, not at module scope: the TypeScript compiler costs about
+  // 290ms to pull in, and callers that already hold a compiled program — the
+  // evaluation workers — must not pay it just to reach the sandbox.
+  const { compileStrategySource } = await import("../compiler/compile-strategy-source.js");
   return runCompiledStrategyProgram(compileStrategySource(source), invocation, limits);
 }
 

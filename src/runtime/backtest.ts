@@ -9,7 +9,8 @@ import type {
   StrategyProgramResult,
   StrategyState,
 } from "../core/types.js";
-import { compileStrategySource } from "../compiler/compile-strategy-source.js";
+import { TIMEFRAME_MS, type Timeframe } from "../core/timeframes.js";
+import type { CompiledStrategyProgram } from "../compiler/compile-strategy-source.js";
 import { StrategySandboxSession } from "./sandbox.js";
 
 const DEFAULT_CONFIG: BacktestConfig = {
@@ -19,14 +20,7 @@ const DEFAULT_CONFIG: BacktestConfig = {
   maxLeverage: 3,
 };
 
-export type StrategyTimeframe = "1m" | "15m" | "1h" | "4h";
-
-const TIMEFRAME_MS: Record<StrategyTimeframe, number> = {
-  "1m": 60_000,
-  "15m": 15 * 60_000,
-  "1h": 60 * 60_000,
-  "4h": 4 * 60 * 60_000,
-};
+export type StrategyTimeframe = Timeframe;
 
 export interface BacktestTimeframeContext {
   primaryTimeframe: StrategyTimeframe;
@@ -96,12 +90,34 @@ export async function runBacktest(
   overrides: Partial<BacktestConfig> = {},
   timeframeContext?: BacktestTimeframeContext,
 ): Promise<BacktestResult> {
+  // The bar count is checked before compiling so that the two entry points
+  // report the same problem first when a call is wrong in both ways.
+  if (bars.length < 2) {
+    throw new Error("Backtest requires at least two market bars.");
+  }
+  // Loaded on demand rather than at module scope: the TypeScript compiler costs
+  // about 290ms to pull in, and an evaluation worker that is handed an already
+  // compiled program has no use for it.
+  const { compileStrategySource } = await import("../compiler/compile-strategy-source.js");
+  return runCompiledBacktest(compileStrategySource(source), bars, overrides, timeframeContext);
+}
+
+/**
+ * The engine proper. Callers that hold a compiled program — anything running the
+ * same variant over several windows — enter here so the program is compiled once
+ * rather than once per window.
+ */
+export async function runCompiledBacktest(
+  program: CompiledStrategyProgram,
+  bars: MarketBar[],
+  overrides: Partial<BacktestConfig> = {},
+  timeframeContext?: BacktestTimeframeContext,
+): Promise<BacktestResult> {
   if (bars.length < 2) {
     throw new Error("Backtest requires at least two market bars.");
   }
 
   const config: BacktestConfig = { ...DEFAULT_CONFIG, ...overrides };
-  const program = compileStrategySource(source);
   let cash = config.initialCapital;
   let position: OpenPosition | null = null;
   let state: StrategyState = {};

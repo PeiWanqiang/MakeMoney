@@ -195,6 +195,8 @@ function dateInput(timestamp: number): string {
 function defaultDays(timeframe: string): number {
   if (timeframe === "1m") return 3;
   if (timeframe === "15m") return 60;
+  if (timeframe === "1d") return 1095;
+  if (timeframe === "1w") return 2555;
   return 365;
 }
 
@@ -206,6 +208,8 @@ function rangeOptions(timeframe: string): Array<{ id: string; days: number }> {
   if (timeframe === "1m") return [{ id: "3d", days: 3 }, { id: "7d", days: 7 }, { id: "30d", days: 30 }];
   if (timeframe === "15m") return [{ id: "30d", days: 30 }, { id: "60d", days: 60 }, { id: "90d", days: 90 }];
   if (timeframe === "1h") return [{ id: "90d", days: 90 }, { id: "180d", days: 180 }, { id: "365d", days: 365 }];
+  if (timeframe === "1d") return [{ id: "365d", days: 365 }, { id: "1095d", days: 1095 }, { id: "1825d", days: 1825 }];
+  if (timeframe === "1w") return [{ id: "1095d", days: 1095 }, { id: "1825d", days: 1825 }, { id: "2555d", days: 2555 }];
   return [{ id: "90d", days: 90 }, { id: "365d", days: 365 }, { id: "1095d", days: 1095 }];
 }
 

@@ -1,6 +1,7 @@
 export * from "./compiler/compile-strategy-source.js";
 export * from "./compiler/strategy-sdk-declaration.js";
 export * from "./compiler/validate-strategy-source.js";
+export * from "./core/timeframes.js";
 export * from "./core/types.js";
 export * from "./data/aggregate-bars.js";
 export * from "./data/hyperliquid-client.js";

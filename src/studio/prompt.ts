@@ -62,7 +62,7 @@ Preserve level conditions versus crossing events exactly:
 - "crosses above", "crosses below", "上穿", "下穿", "金叉", "死叉" mean crossAbove/crossBelow using current and previous values.
 - never add a previous-bar, deduplication, cooldown, state, or timing filter unless the user requested it.
 
-contract.timeframe is the schedule on which onBar runs. If the whole strategy is 1h, set contract.timeframe to 1h and use context.indicators directly. Use context.timeframe("1h") only when onBar runs on another schedule, for example contract.timeframe 15m while signals use closed 1h data. Prefer direct context.position.side checks instead of aliases so audit extraction remains obvious.
+contract.timeframe is the schedule on which onBar runs, and must be one of 1m, 15m, 1h, 4h, 1d, 1w. Daily and weekly bars open at 00:00 UTC; weeks open on Monday. If the whole strategy is 1h, set contract.timeframe to 1h and use context.indicators directly. Use context.timeframe("1h") only when onBar runs on another schedule, for example contract.timeframe 15m while signals use closed 1h data. A strategy that trades on 4h but filters on a daily moving average sets contract.timeframe to 4h and reads timeframe("1d"). Prefer direct context.position.side checks instead of aliases so audit extraction remains obvious.
 
 Every context and context.timeframe(...) view contains closed bars only. Offset 0 is the most recent closed bar, offset 1 is the immediately preceding closed bar. Never shift to offsets 1/2 merely because the user emphasized "closed" bars.
 
