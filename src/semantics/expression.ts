@@ -178,25 +178,94 @@ export function operandText(text: string, parentOperator: string, side: "left" |
   return value;
 }
 
+/** One additive term: a product of factors over a product of divisors. */
+interface Term {
+  negated: boolean;
+  numerator: string[];
+  denominator: string[];
+}
+
+/** Numbers sort ahead of names so a coefficient leads its term, as people write it. */
+function compareFactors(left: string, right: string): number {
+  const leftNumeric = /^-?\d/.test(left);
+  const rightNumeric = /^-?\d/.test(right);
+  if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 /**
- * Re-emits a canonical expression with redundant parentheses removed.
+ * Collects a multiplicative chain into factors and divisors.
  *
- * Contract text arrives as the model wrote it, so the same arithmetic can reach
- * the comparison in a different but equivalent grouping than the one extracted
- * from the program. Both sides are put through this before they are compared.
+ * Descending into the right of a division swaps the two roles, which is what
+ * flattens `atr/(close/2)` into `2*atr/close` instead of leaving a nested
+ * quotient that no textual rule could match.
+ */
+function collectFactors(expression: string, inverted: boolean, term: Term): void {
+  const value = stripOuterParentheses(expression);
+  const split = splitBinary(value, "*/");
+  if (split) {
+    collectFactors(split.left, inverted, term);
+    collectFactors(split.right, split.operator === "/" ? !inverted : inverted, term);
+    return;
+  }
+  if (value.startsWith("-") && !/^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(value)) {
+    term.negated = !term.negated;
+    collectFactors(value.slice(1), inverted, term);
+    return;
+  }
+  // A factor that is itself a sum stays atomic; it is normalized on its own and
+  // re-parenthesized, so the round trip through this function is stable.
+  const factor = splitBinary(value, "+-") ? `(${normalizeExpressionText(value)})` : value;
+  (inverted ? term.denominator : term.numerator).push(factor);
+}
+
+function collectTerms(expression: string, negated: boolean, terms: Term[]): void {
+  const value = stripOuterParentheses(expression);
+  const split = splitBinary(value, "+-");
+  if (split) {
+    collectTerms(split.left, negated, terms);
+    collectTerms(split.right, split.operator === "-" ? !negated : negated, terms);
+    return;
+  }
+  const term: Term = { negated, numerator: [], denominator: [] };
+  collectFactors(value, false, term);
+  term.numerator.sort(compareFactors);
+  term.denominator.sort(compareFactors);
+  terms.push(term);
+}
+
+function termText(term: Term): string {
+  const numerator = term.numerator.length > 0 ? term.numerator.join("*") : "1";
+  const denominator = term.denominator.map((factor) => `/${factor}`).join("");
+  return `${numerator}${denominator}`;
+}
+
+/**
+ * Re-emits an expression in a canonical algebraic form.
+ *
+ * Two spellings of one calculation have to reduce to one string, because the
+ * contract carries the model's spelling while the program carries its own and
+ * the two are compared as text. Dropping redundant parentheses is not enough:
+ * `atr/close*2`, `2*atr/close`, `atr*2/close` and `atr/(close/2)` are the same
+ * stop, and a gate that rejected three of the four would make an ATR-sized stop
+ * work only when the model happened to write both sides identically.
+ *
+ * Terms and factors are reordered but never evaluated. Folding `0.1*3` into a
+ * literal would introduce floating-point noise into an audit record, and no real
+ * strategy needs it.
  */
 export function normalizeExpressionText(expression: string): string {
   const value = stripOuterParentheses(expression);
   if (value === "") return expression.trim();
-  for (const operators of ["+-", "*/"]) {
-    const split = splitBinary(value, operators);
-    if (!split) continue;
-    const left = normalizeExpressionText(split.left);
-    const right = normalizeExpressionText(split.right);
-    return `${operandText(left, split.operator, "left")}${split.operator}${operandText(right, split.operator, "right")}`;
-  }
-  if (value.startsWith("-")) return `-${operandText(normalizeExpressionText(value.slice(1)), "*", "right")}`;
-  return value;
+  if (!splitBinary(value, "+-") && !splitBinary(value, "*/")) return value;
+  const terms: Term[] = [];
+  collectTerms(value, false, terms);
+  const rendered = terms
+    .map((term) => ({ negated: term.negated, text: termText(term) }))
+    .sort((left, right) => (left.text < right.text ? -1 : left.text > right.text ? 1 : 0));
+  return rendered
+    .map((term, index) => (term.negated ? `-${term.text}` : index === 0 ? term.text : `+${term.text}`))
+    .join("");
 }
 
 

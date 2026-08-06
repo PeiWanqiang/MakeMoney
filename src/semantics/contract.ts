@@ -22,6 +22,16 @@ export interface ContractDecision {
   sizeValue: number | null;
   stopLossPercent: ContractValue;
   takeProfitRiskReward: ContractValue;
+  /**
+   * Share of the open position a close decision takes off, in (0,1], or null
+   * for the whole position. A constant rather than an expression: a scale-out
+   * the customer confirms as "half" has to stay half, and letting it compute
+   * itself would put position sizing back inside the exit.
+   *
+   * Null on every open decision, and on contracts written before scale-out
+   * existed, so an older stored contract still canonicalizes unchanged.
+   */
+  closeFraction: number | null;
 }
 
 /** Collapses an expression that is really a constant, so constants have one form. */
@@ -83,7 +93,17 @@ export function canonicalDecision(decision: ContractDecision): string {
     sizeValue: decision.sizeValue,
     stopLossPercent: normalizeContractValue(decision.stopLossPercent),
     takeProfitRiskReward: normalizeContractValue(decision.takeProfitRiskReward),
+    closeFraction: normalizeCloseFraction(decision.closeFraction),
   });
+}
+
+/**
+ * Collapses the two spellings of a whole-position exit. A program may return
+ * `fraction: 1` and a contract may leave the field null; they mean the same
+ * exit and have to compare equal.
+ */
+export function normalizeCloseFraction(value: number | null | undefined): number | null {
+  return value === undefined || value === null || value === 1 ? null : value;
 }
 
 export function compactCondition(value: string): string {

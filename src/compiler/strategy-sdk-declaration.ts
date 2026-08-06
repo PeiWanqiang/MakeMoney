@@ -29,7 +29,7 @@ type StrategyDecision =
       takeProfitRiskReward?: number;
       reason?: string;
     }
-  | { type: "close"; reason?: string };
+  | { type: "close"; fraction?: number; reason?: string };
 
 interface StrategyContext {
   readonly market: {

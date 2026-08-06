@@ -28,10 +28,10 @@ Rules:
 - unsupported requires one or more unsupportedCapabilities;
 - not_strategy has resolvedIntent=null and empty question/capability arrays;
 - contract conditions use canonical strings, for example rsi("close",14,0) < 30 or crossAbove(ema("close",20,0),ema("close",20,1),ema("close",50,0),ema("close",50,1));
-- every decision field is present. Unknown/not-applicable values are null. A close decision uses null for side, sizeKind, sizeValue, stopLossPercent and takeProfitRiskReward.
+- every decision field is present. Unknown/not-applicable values are null. A close decision uses null for side, sizeKind, sizeValue, stopLossPercent and takeProfitRiskReward. closeFraction is the share a partial exit closes, in (0,1], and null for a whole-position exit or an open decision.
 
 Return only one JSON object with exactly:
-{"disposition":"ready|needs_clarification|unsupported|not_strategy","confidence":"high|medium|low","evidence":[{"quote":"exact source substring","supports":["fact"]}],"resolvedIntent":"string or null","contract":{"schemaVersion":"1.0","timeframe":"1m|15m|1h|4h","rules":[{"when":["condition"],"decision":{"type":"open|close","side":"long|short|null","sizeKind":"riskPercent|fixedNotional|null","sizeValue":null,"stopLossPercent":null,"takeProfitRiskReward":null}}],"unsupportedCapabilities":[]},"clarificationQuestions":[],"unsupportedCapabilities":[],"rationale":"short explanation","assumptions":[]}
+{"disposition":"ready|needs_clarification|unsupported|not_strategy","confidence":"high|medium|low","evidence":[{"quote":"exact source substring","supports":["fact"]}],"resolvedIntent":"string or null","contract":{"schemaVersion":"1.0","timeframe":"1m|15m|1h|4h","rules":[{"when":["condition"],"decision":{"type":"open|close","side":"long|short|null","sizeKind":"riskPercent|fixedNotional|null","sizeValue":null,"stopLossPercent":null,"takeProfitRiskReward":null,"closeFraction":null}}],"unsupportedCapabilities":[]},"clarificationQuestions":[],"unsupportedCapabilities":[],"rationale":"short explanation","assumptions":[]}
 `.trim();
 
 export interface DeepSeekSuggestionProviderOptions {

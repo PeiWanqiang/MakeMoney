@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { describeApiFailure, type ApiErrorPayload } from "./api-error";
-import BacktestChart, { type BacktestBar, type BacktestTrade, type EquityPoint } from "./backtest-chart";
+import BacktestChart, { type BacktestBar, type BacktestIndicator, type BacktestTrade, type EquityPoint } from "./backtest-chart";
 import { getMessages } from "./i18n";
 import { localePath, LOCALE_TAG, type Locale } from "./i18n/locales";
 
@@ -62,14 +62,16 @@ export interface BacktestResult {
   };
   trades: BacktestTrade[];
   /**
-   * The two chart series are optional because the stored row drops them: a
-   * result restored from the database (step 4 reads the latest run) carries the
+   * The chart series are optional because the stored row drops them: a result
+   * restored from the database (step 4 reads the latest run) carries the
    * metrics and the trades but not the history behind them.
    */
   equityCurve?: EquityPoint[];
   /** Points before server-side decimation, so the chart can say what it shows. */
   equityCurvePoints?: number;
   bars?: BacktestBar[];
+  /** The indicator lines the confirmed rules read, one value per bar. */
+  indicators?: BacktestIndicator[];
 }
 
 interface OptimizationParameter {
@@ -563,7 +565,16 @@ export default function BacktestWorkspace({
                   <div><span>{copy.chartEyebrow}</span><h3>{copy.chartTitle(result.asset, result.timeframe)}</h3></div>
                   <p>{copy.chartHint}</p>
                 </div>
-                <BacktestChart bars={result.bars} trades={result.trades} equityCurve={result.equityCurve ?? []} asset={result.asset} />
+                <BacktestChart
+                  key={result.id}
+                  bars={result.bars}
+                  trades={result.trades}
+                  equityCurve={result.equityCurve ?? []}
+                  indicators={result.indicators ?? []}
+                  asset={result.asset}
+                  initialCapital={result.initialCapital}
+                  locale={locale}
+                />
               </div>
             )}
 

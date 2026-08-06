@@ -23,6 +23,8 @@ export interface ContractDecision {
   /** A constant, or an expression in the same grammar the conditions use. */
   stopLossPercent?: number | string | null;
   takeProfitRiskReward?: number | string | null;
+  /** Share of the position a close takes off, or null/absent for all of it. */
+  closeFraction?: number | null;
 }
 
 export interface ContractRule {
@@ -163,8 +165,17 @@ export function describeCondition(messages: Messages, raw: string): string {
   return humanizeExpression(messages, raw);
 }
 
+/** The share a partial close takes off, or null when it closes everything. */
+function partialShare(decision: ContractDecision): number | null {
+  const value = decision.closeFraction;
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value < 1 ? value : null;
+}
+
 function describeAction(messages: Messages, decision: ContractDecision): string {
-  if (decision.type === "close") return messages.contract.actionClose;
+  if (decision.type === "close") {
+    const share = partialShare(decision);
+    return share === null ? messages.contract.actionClose : messages.contract.actionClosePartial(formatPercent(share));
+  }
   if (decision.type === "open") {
     if (decision.side === "long") return messages.contract.actionOpenLong;
     if (decision.side === "short") return messages.contract.actionOpenShort;
@@ -202,10 +213,11 @@ function describeRisk(messages: Messages, decision: ContractDecision): string[] 
 /** Renders the machine decision of one rule as a short label for the expert view. */
 export function describeDecision(messages: Messages, decision: Record<string, unknown> | undefined): string {
   if (!decision) return messages.contract.decisionUnknown;
+  const share = partialShare(decision as ContractDecision);
   const type = decision.type === "open"
     ? messages.contract.decisionOpen
     : decision.type === "close"
-      ? messages.contract.decisionClose
+      ? share === null ? messages.contract.decisionClose : messages.contract.decisionClosePartial(formatPercent(share))
       : String(decision.type ?? messages.contract.actionOther);
   const side = decision.side === "long"
     ? messages.contract.sideLong

@@ -45,6 +45,11 @@ interface ContractDecision {
    */
   stopLossPercent: number | string | null;
   takeProfitRiskReward: number | string | null;
+  /**
+   * Share of the open position a close decision takes off, in (0,1], or null
+   * (or absent, on a contract stored before scale-out existed) for all of it.
+   */
+  closeFraction?: number | null;
 }
 
 interface ContractRule {
@@ -252,7 +257,10 @@ const KLINE_CACHE_VERSION = "klines-v1";
 // Bumped when execution moved from the contract interpreter to the service:
 // the key now carries the engine, so an old-engine cache entry cannot be served
 // for a new-engine run of the same logical request.
-const BACKTEST_CACHE_VERSION = "backtest-v5-engine-service";
+// Bumped again when the interpreter's RSI adopted the sandbox engine's reading
+// of a flat window (neutral 50 rather than 100): a stored result computed under
+// the old definition must not be replayed under the new one.
+const BACKTEST_CACHE_VERSION = "backtest-v6-rsi-flat-window";
 const SERVICE_ENGINE_VERSION = "cli-sandbox-0.1.0";
 // Bumped when optimization moved to the service: the experiment id derives from
 // this key, and the blind test is one-shot per id, so an old-engine experiment
@@ -478,6 +486,11 @@ function validateContract(value: unknown): StrategyContract {
     if (!Array.isArray(record.when) || record.when.length === 0 || !record.when.every((item) => typeof item === "string")) throw new Error(`策略规则 ${index + 1} 缺少条件`);
     const decision = record.decision as Record<string, unknown> | null;
     if (!decision || !["open", "close"].includes(String(decision.type))) throw new Error(`策略规则 ${index + 1} 的动作无效`);
+    if (decision.closeFraction !== undefined && decision.closeFraction !== null) {
+      const closeFraction = Number(decision.closeFraction);
+      if (!Number.isFinite(closeFraction) || closeFraction <= 0 || closeFraction > 1) throw new Error(`策略规则 ${index + 1} 的部分平仓比例无效`);
+      if (decision.type !== "close") throw new Error(`策略规则 ${index + 1} 在开仓动作上设置了平仓比例`);
+    }
     if (decision.type === "open") {
       if (!["long", "short"].includes(String(decision.side))) throw new Error(`策略规则 ${index + 1} 缺少开仓方向`);
       if (!["riskPercent", "equityPercent", "fixedNotional"].includes(String(decision.sizeKind))) throw new Error(`策略规则 ${index + 1} 的仓位类型无效`);
@@ -1179,6 +1192,12 @@ class IndicatorEngine {
       else if (name === "ema") output = this.exponentialMovingAverage(values, period);
       else if (name === "rsi") {
         output = Array(values.length).fill(null);
+        // A window with no losses is only "maximally strong" when it actually
+        // rose; a perfectly flat window has no direction at all and reads as
+        // the neutral 50. The sandbox engine (`src/runtime/sandbox.ts`) defines
+        // it that way, and a chart that plots this series has to agree with the
+        // engine that traded on it.
+        const wilder = (gain: number, loss: number) => loss === 0 ? (gain === 0 ? 50 : 100) : 100 - 100 / (1 + gain / loss);
         let averageGain = 0;
         let averageLoss = 0;
         for (let index = 1; index < values.length; index += 1) {
@@ -1188,11 +1207,11 @@ class IndicatorEngine {
           if (index <= period) {
             averageGain += gain / period;
             averageLoss += loss / period;
-            if (index === period) output[index] = averageLoss === 0 ? 100 : 100 - 100 / (1 + averageGain / averageLoss);
+            if (index === period) output[index] = wilder(averageGain, averageLoss);
           } else {
             averageGain = (averageGain * (period - 1) + gain) / period;
             averageLoss = (averageLoss * (period - 1) + loss) / period;
-            output[index] = averageLoss === 0 ? 100 : 100 - 100 / (1 + averageGain / averageLoss);
+            output[index] = wilder(averageGain, averageLoss);
           }
         }
       } else if (name === "percentChange") {
@@ -1372,13 +1391,27 @@ export function runContractBacktest(contract: StrategyContract, bars: Bar[], con
   const evaluationBars = bars.filter((bar) => bar.timestamp >= evaluationStartTime);
   if (evaluationBars.length < 2) throw new Error("绩效窗口没有足够的完整K线");
   const withSlippage = (price: number, side: "buy" | "sell") => price * (1 + (side === "buy" ? 1 : -1) * config.slippageBps / 10_000);
-  const closePosition = (bar: Bar, rawPrice: number, reason: string) => {
+  /**
+   * Closes `fraction` of the open position, defaulting to all of it. Mirrors the
+   * service engine: the entry fee and entry slippage already accrued are split
+   * by the share being closed, so the first leg of a scale-out does not book the
+   * whole entry cost and leave the remainder looking free.
+   */
+  const closePosition = (bar: Bar, rawPrice: number, reason: string, fraction = 1) => {
     if (!position) return;
+    const share = Math.min(1, Math.max(0, fraction));
+    if (share <= 0) return;
+    const remainingQuantity = position.quantity * (1 - share);
+    const closesAll = remainingQuantity <= position.quantity * 1e-9;
+    const closedShare = closesAll ? 1 : share;
+    const closedQuantity = position.quantity * closedShare;
     const exitPrice = withSlippage(rawPrice, position.side === "long" ? "sell" : "buy");
     const direction = position.side === "long" ? 1 : -1;
-    const grossPnl = direction * (exitPrice - position.entryPrice) * position.quantity;
-    const exitFee = exitPrice * position.quantity * config.takerFeeRate;
-    const exitSlippageCost = Math.abs(exitPrice - rawPrice) * position.quantity;
+    const grossPnl = direction * (exitPrice - position.entryPrice) * closedQuantity;
+    const exitFee = exitPrice * closedQuantity * config.takerFeeRate;
+    const exitSlippageCost = Math.abs(exitPrice - rawPrice) * closedQuantity;
+    const entryFee = position.entryFee * closedShare;
+    const entrySlippageCost = position.entrySlippageCost * closedShare;
     cash += grossPnl - exitFee;
     trades.push({
       side: position.side,
@@ -1386,14 +1419,23 @@ export function runContractBacktest(contract: StrategyContract, bars: Bar[], con
       exitTimestamp: bar.timestamp,
       entryPrice: position.entryPrice,
       exitPrice,
-      quantity: position.quantity,
+      quantity: closedQuantity,
       grossPnl,
-      fees: position.entryFee + exitFee,
-      slippageCost: position.entrySlippageCost + exitSlippageCost,
-      netPnl: grossPnl - position.entryFee - exitFee,
+      fees: entryFee + exitFee,
+      slippageCost: entrySlippageCost + exitSlippageCost,
+      netPnl: grossPnl - entryFee - exitFee,
       exitReason: reason,
     });
-    position = null;
+    if (closesAll) {
+      position = null;
+      return;
+    }
+    position = {
+      ...position,
+      quantity: position.quantity - closedQuantity,
+      entryFee: position.entryFee - entryFee,
+      entrySlippageCost: position.entrySlippageCost - entrySlippageCost,
+    };
   };
 
   for (let index = 0; index < bars.length; index += 1) {
@@ -1432,7 +1474,7 @@ export function runContractBacktest(contract: StrategyContract, bars: Bar[], con
         stopPrice: entryPrice - direction * stopDistance,
         takeProfitPrice: typeof decision.takeProfitRiskReward === "number" ? entryPrice + direction * stopDistance * decision.takeProfitRiskReward : null,
       };
-    } else if (pending?.type === "close" && position) closePosition(bar, bar.open, "strategy");
+    } else if (pending?.type === "close" && position) closePosition(bar, bar.open, "strategy", pending.closeFraction ?? 1);
     pending = null;
 
     if (position) {
@@ -1465,6 +1507,140 @@ export function runContractBacktest(contract: StrategyContract, bars: Bar[], con
 }
 
 type BacktestCoreResult = ReturnType<typeof runContractBacktest>;
+
+/* ------------------------------------------------------------ chart series */
+
+/**
+ * Where each indicator belongs on the chart.
+ *
+ * The key is the grammar's indicator name, so the placement is a property of
+ * the capability and not of any one strategy: anything that produces a price
+ * level is drawn over the candles, and anything on its own scale gets a pane,
+ * shared by every reference of that kind so two RSI periods stay comparable in
+ * one frame.
+ */
+const PLOT_PANE_BY_INDICATOR: Record<string, string> = {
+  sma: "price",
+  ema: "price",
+  highest: "price",
+  lowest: "price",
+  bollingerBands: "price",
+  rsi: "rsi",
+  macd: "macd",
+  atr: "atr",
+  percentChange: "percentChange",
+};
+
+/**
+ * Argument count per indicator call, the last of which is the lag in bars.
+ * Plotting wants the series, not one lagged reading, so the lag is normalised
+ * to zero and `sma("close",20,0)` and `sma("close",20,1)` collapse into the one
+ * line a reader would expect to see.
+ */
+const PLOT_ARGUMENT_COUNT: Record<string, number> = {
+  sma: 3, ema: 3, rsi: 3, highest: 3, lowest: 3, percentChange: 3, atr: 2, bollingerBands: 4, macd: 5,
+};
+
+/** Every indicator reference in a condition, including ones inside arithmetic or a cross. */
+const INDICATOR_REFERENCE =
+  /(?:timeframe\("(1m|15m|1h|4h)"\)\.)?(sma|ema|rsi|highest|lowest|percentChange|atr|bollingerBands|macd)\(([^()]*)\)(?:\.(upper|middle|lower|macd|signal|histogram))?/g;
+
+/**
+ * Bound on the plotted lines. A strategy referencing more than this still runs
+ * untouched — only the chart stops adding series, because each one costs a
+ * value per bar and the response already carries 10,000 of those.
+ */
+const MAX_PLOT_SERIES = 6;
+
+export interface PlotSeries {
+  /** The canonical expression, which is also the stable key and the label source. */
+  id: string;
+  indicator: string;
+  /** Band or line of a multi-output indicator; null for single-output ones. */
+  component: string | null;
+  timeframe: Timeframe;
+  /** `"price"` overlays the candles; any other value names a pane of its own. */
+  pane: string;
+  /** One value per bar, index-aligned with `bars`; null before the warm-up ends. */
+  values: Array<number | null>;
+}
+
+/** Rewrites one call at lag zero, or returns null when the arity is not the grammar's. */
+function canonicalPlotCall(indicator: string, callArguments: string[]): string | null {
+  const arity = PLOT_ARGUMENT_COUNT[indicator];
+  if (arity === undefined) return null;
+  // The grammar lets `percentChange` omit its lag, in which case the arguments
+  // are already the ones that identify the series.
+  const head = callArguments.length === arity ? callArguments.slice(0, -1)
+    : callArguments.length === arity - 1 ? callArguments
+      : null;
+  if (!head || head.some((argument) => argument === "")) return null;
+  return `${indicator}(${[...head, "0"].join(",")})`;
+}
+
+/**
+ * Display resolution rather than analysis precision. Eight significant digits
+ * is far past what a line a few hundred pixels tall can resolve at any price
+ * scale, and it keeps the per-bar arrays from doubling the response.
+ */
+function plotValue(value: number | null): number | null {
+  return value === null || !Number.isFinite(value) ? null : Number(value.toPrecision(8));
+}
+
+/**
+ * The indicator series behind the confirmed rules, one value per bar.
+ *
+ * The references are read out of the locked contract — the same text the
+ * execution engine evaluates and the same text the product explains back to the
+ * customer — and the values come from the engine's own indicator
+ * implementation at the same bar cursor, so a plotted line is what the rule saw
+ * rather than a second implementation drawn beside it.
+ *
+ * Chart data is never worth failing a run over: a reference the engine cannot
+ * evaluate is dropped from the chart and the backtest is returned regardless.
+ */
+function plotSeries(contract: StrategyContract, bars: Bar[]): PlotSeries[] {
+  try {
+    const timeframes = referencedTimeframes(contract);
+    const series = Object.fromEntries(timeframes.map((timeframe) => [timeframe, aggregateBars(bars, contract.timeframe, timeframe)]));
+    const indicators = new IndicatorEngine(series, contract.timeframe, bars);
+    const found = new Map<string, Omit<PlotSeries, "values">>();
+    for (const rule of contract.rules) {
+      const sources = [
+        ...rule.when,
+        ...(typeof rule.decision.stopLossPercent === "string" ? [rule.decision.stopLossPercent] : []),
+        ...(typeof rule.decision.takeProfitRiskReward === "string" ? [rule.decision.takeProfitRiskReward] : []),
+      ];
+      for (const source of sources) {
+        for (const [, prefix, indicator, callArguments, component] of compact(source).matchAll(INDICATOR_REFERENCE)) {
+          const call = canonicalPlotCall(indicator!, splitArguments(callArguments!));
+          if (!call) continue;
+          const id = `${prefix ? `timeframe("${prefix}").` : ""}${call}${component ? `.${component}` : ""}`;
+          if (found.has(id) || found.size >= MAX_PLOT_SERIES) continue;
+          found.set(id, {
+            id,
+            indicator: indicator!,
+            component: component ?? null,
+            timeframe: (prefix ?? contract.timeframe) as Timeframe,
+            pane: PLOT_PANE_BY_INDICATOR[indicator!] ?? indicator!,
+          });
+        }
+      }
+    }
+    const output: PlotSeries[] = [];
+    for (const entry of found.values()) {
+      try {
+        output.push({ ...entry, values: bars.map((_, index) => plotValue(indicators.expression(entry.id, index, contract.timeframe))) });
+      } catch {
+        // A reference the interpreter cannot resolve is left off the chart; the
+        // rule it came from is still executed by whichever engine ran the test.
+      }
+    }
+    return output;
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Data fields the Web kline pipeline cannot transport today. A program that
@@ -1796,15 +1972,23 @@ async function runBacktest(request: Request, env: BacktestEnv, identity: Identit
     ...result,
     // Series travel as numeric rows rather than objects; `series` names the
     // columns so the shape stays self-describing. `equityCurvePoints` is the
-    // count before decimation, so the payload admits what it dropped.
-    series: { bars: ["timestamp", "open", "high", "low", "close"], equityCurve: ["timestamp", "equity"] },
+    // count before decimation, so the payload admits what it dropped. Indicator
+    // values carry no timestamp of their own: they are index-aligned with
+    // `bars`, which is what lets the chart replay them together.
+    series: {
+      bars: ["timestamp", "open", "high", "low", "close"],
+      equityCurve: ["timestamp", "equity"],
+      indicators: ["value per bar, aligned to bars"],
+    },
     equityCurve: wireEquityCurve(result.equityCurve),
     equityCurvePoints: result.equityCurve.length,
     bars: wireBars(bars),
+    indicators: plotSeries(contract, bars),
   };
-  // The row keeps everything except the two series: they are reproducible from
-  // the cached result and would otherwise dominate the stored JSON.
-  const storedResult = { ...response, bars: undefined, equityCurve: undefined, series: undefined };
+  // The row keeps everything except the transported series: they are
+  // reproducible from the contract and the cached result, and would otherwise
+  // dominate the stored JSON.
+  const storedResult = { ...response, bars: undefined, equityCurve: undefined, indicators: undefined, series: undefined };
   await env.DB.prepare(`INSERT INTO backtest_runs
     (id, strategy_submission_id, user_id, session_id, created_at, asset, market, timeframe, start_time, end_time, initial_capital, bar_count, trade_count, result_json)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -2470,7 +2654,7 @@ export async function loadLatestBacktest(db: D1Database, identity: Identity, str
     const stored = JSON.parse(row.result_json) as Record<string, unknown>;
     // The stored receipt omits the series; the lab renders no chart, so empty
     // arrays keep the client type honest instead of leaving the fields undefined.
-    return { ...stored, bars: [], equityCurve: [] };
+    return { ...stored, bars: [], equityCurve: [], indicators: [] };
   } catch {
     return null;
   }

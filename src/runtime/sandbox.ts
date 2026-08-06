@@ -54,7 +54,16 @@ function assertDecision(value: unknown): asserts value is StrategyDecision {
     throw new Error("Strategy onBar must return a decision object.");
   }
   const decision = value as Record<string, unknown>;
-  if (decision.type === "hold" || decision.type === "close") return;
+  if (decision.type === "hold") return;
+  if (decision.type === "close") {
+    // A share outside (0,1] is not a smaller exit, it is an exit the engine
+    // cannot honor: 0 closes nothing while claiming a trade, and above 1 would
+    // sell quantity the position never held.
+    if (decision.fraction === undefined) return;
+    assertFiniteNumber(decision.fraction, "fraction");
+    if (decision.fraction <= 0 || decision.fraction > 1) throw new Error("fraction must be greater than zero and at most one.");
+    return;
+  }
   if (decision.type !== "open") throw new Error(`Unsupported strategy decision '${String(decision.type)}'.`);
   if (decision.side !== "long" && decision.side !== "short") throw new Error("Open decision side must be 'long' or 'short'.");
   if (!decision.size || typeof decision.size !== "object") throw new Error("Open decision requires a size object.");

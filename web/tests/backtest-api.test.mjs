@@ -183,6 +183,285 @@ test("executes a percentage pullback with account-equity notional sizing", async
   }
 });
 
+test("scales out of a position and books each leg as its own trade", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error("external fetch must not run on a local-data hit"); };
+  try {
+    // Enters at 100, takes half off at 110, closes the rest at 120.
+    const scaleOutBars = [
+      [start, "100", "101", "98", "99", "1000"],
+      [start + 3_600_000, "100", "101", "99", "100", "1000"],
+      [start + 7_200_000, "100", "111", "100", "110", "1000"],
+      [start + 10_800_000, "110", "121", "110", "120", "1000"],
+      [start + 14_400_000, "120", "121", "119", "120", "1000"],
+    ];
+    const strategy = {
+      status: "ready",
+      strategyName: "Scale out",
+      contract: {
+        schemaVersion: "1.0",
+        timeframe: "1h",
+        rules: [
+          {
+            when: ['position.side == "flat"', "market.close < 100"],
+            decision: { type: "open", side: "long", sizeKind: "fixedNotional", sizeValue: 1000, stopLossPercent: 0.5, takeProfitRiskReward: null, closeFraction: null },
+          },
+          {
+            when: ['position.side == "long"', "market.close > 115"],
+            decision: { type: "close", side: null, sizeKind: null, sizeValue: null, stopLossPercent: null, takeProfitRiskReward: null, closeFraction: null },
+          },
+          {
+            when: ['position.side == "long"', "market.close > 105", "market.close <= 115"],
+            decision: { type: "close", side: null, sizeKind: null, sizeValue: null, stopLossPercent: null, takeProfitRiskReward: null, closeFraction: 0.5 },
+          },
+        ],
+        unsupportedCapabilities: [],
+      },
+    };
+    const local = gzipSync(strToU8(JSON.stringify(scaleOutBars)));
+    const ASSETS = { async fetch() { return new Response(local); } };
+    const { response, result } = await run("Binance Perpetual", [], { ASSETS }, {}, strategy);
+    assert.equal(response.status, 200, JSON.stringify(result));
+    assert.equal(result.metrics.tradeCount, 2);
+
+    // 1000 notional at 100 is 10 units; the scale-out takes 5 and leaves 5,
+    // and the remainder keeps the original entry price.
+    const [scaleOut, flatten] = result.trades;
+    assert.equal(scaleOut.quantity, 5);
+    assert.equal(scaleOut.entryPrice, 100);
+    assert.equal(scaleOut.exitPrice, 110);
+    assert.equal(flatten.quantity, 5);
+    assert.equal(flatten.entryPrice, 100);
+    assert.equal(flatten.exitPrice, 120);
+    assert.equal(result.finalEquity, 10_150);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("refuses a close fraction the engine cannot honor", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error("external fetch must not run on a local-data hit"); };
+  try {
+    const strategy = {
+      status: "ready",
+      strategyName: "Bad fraction",
+      contract: {
+        schemaVersion: "1.0",
+        timeframe: "1h",
+        rules: [{
+          when: ['position.side == "long"', "market.close > 105"],
+          decision: { type: "close", side: null, sizeKind: null, sizeValue: null, stopLossPercent: null, takeProfitRiskReward: null, closeFraction: 1.5 },
+        }],
+        unsupportedCapabilities: [],
+      },
+    };
+    const local = gzipSync(strToU8(JSON.stringify(bars)));
+    const ASSETS = { async fetch() { return new Response(local); } };
+    const { response } = await run("Binance Perpetual", [], { ASSETS }, {}, strategy);
+    assert.notEqual(response.status, 200);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+/* ------------------------------------------------------- chart plot series */
+
+/** Hourly bars whose open and close are the given closes, so hand-checked means stay exact. */
+function hourlyBars(closes) {
+  return closes.map((close, index) => [start + index * 3_600_000, String(close), String(close + 1), String(close - 1), String(close), "1000"]);
+}
+
+/** Runs a contract over the given closes and returns the transported chart series. */
+async function plot(rules, closes) {
+  const rows = hourlyBars(closes);
+  const local = gzipSync(strToU8(JSON.stringify(rows)));
+  const ASSETS = { async fetch() { return new Response(local); } };
+  const strategy = { status: "ready", strategyName: "Plot series", contract: { schemaVersion: "1.0", timeframe: "1h", rules, unsupportedCapabilities: [] } };
+  const inserts = [];
+  const { response, result } = await run(
+    "Binance Perpetual",
+    inserts,
+    { ASSETS },
+    { startTime: start, endTime: start + (closes.length - 1) * 3_600_000 },
+    strategy,
+  );
+  assert.equal(response.status, 200, JSON.stringify(result));
+  return { result, indicators: result.indicators, byId: new Map(result.indicators.map((entry) => [entry.id, entry])), inserts };
+}
+
+const NEVER = 'market.close > 99999999';
+const CLOSE_RULE = {
+  when: ['position.side == "long"', NEVER],
+  decision: { type: "close", side: null, sizeKind: null, sizeValue: null, stopLossPercent: null, takeProfitRiskReward: null },
+};
+
+function openRule(when, decision = {}) {
+  return {
+    when,
+    decision: { type: "open", side: "long", sizeKind: "equityPercent", sizeValue: 0.5, stopLossPercent: 0.05, takeProfitRiskReward: 2, ...decision },
+  };
+}
+
+test("transports one indicator line per reference the confirmed rules read", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error("external fetch must not run on a local-data hit"); };
+  try {
+    const closes = Array.from({ length: 60 }, (_, index) => 100 + index);
+    const { result, indicators, byId, inserts } = await plot([
+      openRule([
+        'position.side == "flat"',
+        'crossAbove(sma("close",5,0), sma("close",5,1), ema("close",10,0), ema("close",10,1))',
+        'rsi("close",14,0) < 70',
+        NEVER,
+      ]),
+      { when: ['position.side == "long"', 'market.close > bollingerBands("close",20,2,0).upper'], decision: CLOSE_RULE.decision },
+    ], closes);
+
+    // One line per distinct series: the two `sma` references differ only by lag,
+    // and lag is a reading of a series rather than a series of its own.
+    assert.deepEqual(indicators.map((entry) => entry.id), [
+      'sma("close",5,0)',
+      'ema("close",10,0)',
+      'rsi("close",14,0)',
+      'bollingerBands("close",20,2,0).upper',
+    ]);
+    assert.deepEqual(indicators.map((entry) => entry.pane), ["price", "price", "rsi", "price"]);
+    assert.deepEqual(indicators.map((entry) => entry.timeframe), ["1h", "1h", "1h", "1h"]);
+    assert.equal(byId.get('bollingerBands("close",20,2,0).upper').component, "upper");
+    assert.equal(byId.get('sma("close",5,0)').component, null);
+
+    // Values are index-aligned with the transported bars, and each line stays
+    // empty until its own warm-up ends.
+    for (const entry of indicators) assert.equal(entry.values.length, result.bars.length);
+    assert.equal(byId.get('sma("close",5,0)').values[3], null);
+    assert.equal(byId.get('sma("close",5,0)').values[4], 102);
+    assert.equal(byId.get('sma("close",5,0)').values[59], 157);
+    assert.equal(byId.get('ema("close",10,0)').values[8], null);
+    assert.equal(byId.get('ema("close",10,0)').values[9], 104.5);
+    assert.equal(byId.get('rsi("close",14,0)').values[13], null);
+    assert.equal(byId.get('rsi("close",14,0)').values[14], 100);
+    assert.equal(byId.get('bollingerBands("close",20,2,0).upper').values[18], null);
+    assert.ok(byId.get('bollingerBands("close",20,2,0).upper').values[19] > 109.5);
+
+    assert.deepEqual(result.series.indicators, ["value per bar, aligned to bars"]);
+    // The receipt keeps the metrics, never the per-bar series behind them.
+    assert.equal(JSON.parse(inserts[0].at(-1)).indicators, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("indicator periods drive the warm-up rather than any fixed constant", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error("external fetch must not run on a local-data hit"); };
+  try {
+    const closes = Array.from({ length: 40 }, (_, index) => 100 + index * 2);
+    const { byId } = await plot([openRule(['position.side == "flat"', 'sma("close",8,0) > lowest("low",3,0)', NEVER])], closes);
+    assert.deepEqual([...byId.keys()], ['sma("close",8,0)', 'lowest("low",3,0)']);
+    assert.equal(byId.get('sma("close",8,0)').values[6], null);
+    assert.equal(byId.get('sma("close",8,0)').values[7], 107);
+    assert.equal(byId.get('lowest("low",3,0)').values[1], null);
+    assert.equal(byId.get('lowest("low",3,0)').values[2], 99);
+    assert.equal(byId.get('lowest("low",3,0)').pane, "price");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("covers every scale the grammar can produce, including higher timeframes and risk expressions", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error("external fetch must not run on a local-data hit"); };
+  try {
+    const closes = Array.from({ length: 200 }, (_, index) => 100 + Math.sin(index / 5) * 12 + index * 0.4);
+    const { result, indicators, byId } = await plot([
+      openRule(
+        [
+          'position.side == "flat"',
+          'macd("close",12,26,9,0).histogram > 0',
+          'timeframe("4h").rsi("close",14,0) > 50',
+          'percentChange("close",5,0) > 0.01',
+          NEVER,
+        ],
+        // A volatility-sized stop is part of the strategy's semantics, so the
+        // series behind it is drawn too. Only the service engine executes an
+        // expression here, which is why this rule never reaches a fill.
+        { stopLossPercent: "atr(14,0)/market.close*2" },
+      ),
+    ], closes);
+
+    assert.deepEqual(indicators.map((entry) => entry.id), [
+      'macd("close",12,26,9,0).histogram',
+      'timeframe("4h").rsi("close",14,0)',
+      'percentChange("close",5,0)',
+      "atr(14,0)",
+    ]);
+    // Each scale gets its own pane, and price-level indicators are the only ones overlaid.
+    assert.deepEqual(indicators.map((entry) => entry.pane), ["macd", "rsi", "percentChange", "atr"]);
+    assert.equal(byId.get('timeframe("4h").rsi("close",14,0)').timeframe, "4h");
+    assert.equal(byId.get('macd("close",12,26,9,0).histogram').component, "histogram");
+    for (const entry of indicators) {
+      assert.equal(entry.values.length, result.bars.length);
+      assert.equal(entry.values[0], null);
+      assert.equal(typeof entry.values.at(-1), "number");
+    }
+    // A 4h reading only changes when a 4h bar closes, so consecutive hourly bars repeat it.
+    const higher = byId.get('timeframe("4h").rsi("close",14,0)').values;
+    assert.equal(higher[196], higher[197]);
+    assert.equal(result.metrics.tradeCount, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a strategy that reads price alone reports no indicator lines", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error("external fetch must not run on a local-data hit"); };
+  try {
+    const local = gzipSync(strToU8(JSON.stringify(bars)));
+    const ASSETS = { async fetch() { return new Response(local); } };
+    const { result } = await run("Binance Spot", [], { ASSETS });
+    assert.deepEqual(result.indicators, []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("bounds the transported lines instead of growing the response without limit", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error("external fetch must not run on a local-data hit"); };
+  try {
+    const closes = Array.from({ length: 40 }, (_, index) => 100 + index);
+    const periods = [3, 4, 5, 6, 7, 8, 9, 10];
+    const { indicators, result } = await plot(
+      [openRule(['position.side == "flat"', ...periods.map((period) => `sma("close",${period},0) > 0`), NEVER])],
+      closes,
+    );
+    assert.equal(indicators.length, 6);
+    assert.deepEqual(indicators.map((entry) => entry.id), periods.slice(0, 6).map((period) => `sma("close",${period},0)`));
+    // The rules themselves are untouched by the chart's budget.
+    assert.equal(result.barCount, 40);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("reads a flat window as neutral RSI, matching the sandbox engine", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error("external fetch must not run on a local-data hit"); };
+  try {
+    const { byId } = await plot(
+      [openRule(['position.side == "flat"', 'rsi("close",14,0) < 30', NEVER])],
+      Array.from({ length: 30 }, () => 100),
+    );
+    assert.equal(byId.get('rsi("close",14,0)').values[13], null);
+    assert.equal(byId.get('rsi("close",14,0)').values[14], 50);
+    assert.equal(byId.get('rsi("close",14,0)').values[29], 50);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 async function optimize(strategy, parameters, options = {}) {
   const workerUrl = new URL(`../dist/server/index.js?optimization=${Date.now()}-${Math.random()}`, import.meta.url);
   const { default: worker } = await import(workerUrl.href);
@@ -600,6 +879,7 @@ test("sends both chart series as numeric rows and decimates the equity curve", a
     assert.deepEqual(result.series, {
       bars: ["timestamp", "open", "high", "low", "close"],
       equityCurve: ["timestamp", "equity"],
+      indicators: ["value per bar, aligned to bars"],
     });
     assert.equal(result.bars.length, LONG_BAR_COUNT);
     assert.equal(result.bars[0].length, 5, "bars travel as rows, not objects");

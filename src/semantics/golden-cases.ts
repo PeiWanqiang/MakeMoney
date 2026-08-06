@@ -31,6 +31,7 @@ interface GoldenInput {
 
 const closeDecision: ContractDecision = {
   type: "close", side: null, sizeKind: null, sizeValue: null, stopLossPercent: null, takeProfitRiskReward: null,
+  closeFraction: null,
 };
 
 function intents(chinese: string, english: string, executionChinese: string, executionEnglish: string): GoldenStrategyCase["intents"] {
@@ -65,6 +66,7 @@ function golden(input: GoldenInput): GoldenStrategyCase {
     sizeValue,
     stopLossPercent,
     takeProfitRiskReward: takeProfit ?? null,
+    closeFraction: null,
   };
   const entrySource = input.entry.map((condition) => `      ${condition.source}`).join(" &&\n");
   const exitSource = input.exit.map((condition) => `      ${condition.source}`).join(" &&\n");

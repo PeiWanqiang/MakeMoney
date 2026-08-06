@@ -31,14 +31,14 @@ function response(source: string, changeSummary: string): StrategyProviderRespon
           when: ['market.close >= 101', 'position.side == "flat"', 'state.entries == 0'],
           decision: {
             type: "open", side: "long", sizeKind: "riskPercent", sizeValue: 0.01,
-            stopLossPercent, takeProfitRiskReward: 3,
+            stopLossPercent, takeProfitRiskReward: 3, closeFraction: null,
           },
         },
         {
           when: ['market.close >= 105', 'position.side == "long"'],
           decision: {
             type: "close", side: null, sizeKind: null, sizeValue: null,
-            stopLossPercent: null, takeProfitRiskReward: null,
+            stopLossPercent: null, takeProfitRiskReward: null, closeFraction: null,
           },
         },
       ]),

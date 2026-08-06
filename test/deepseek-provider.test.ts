@@ -51,7 +51,7 @@ describe("DeepSeek strategy provider", () => {
     expect(create).toHaveBeenLastCalledWith(expect.objectContaining({
       model: "deepseek-v4-pro",
       response_format: { type: "json_object" },
-      max_tokens: 8_000,
+      max_tokens: 16_000,
       stream: false,
     }));
     expect(result).toMatchObject({

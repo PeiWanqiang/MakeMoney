@@ -35,8 +35,17 @@ interface StrategyEnv {
  * Bumped again when decision fields became expressions: artifacts cached before
  * that were produced under a prompt that called a computed stop unsupported, so
  * replaying one would keep reporting an intent the engine can now express.
+ *
+ * Bumped again when a close decision gained closeFraction: every scale-out
+ * ("止盈一半于中轨") cached before that was answered unsupported, and replaying
+ * one would keep refusing an exit the engine now executes.
+ *
+ * Bumped again when the prompt gained the lagged-price idiom: a pullback entry
+ * ("跌破下轨后下一根收回") was answered with ctx.history, which neither compiles
+ * under noUncheckedIndexedAccess nor survives contract extraction, so artifacts
+ * cached before this carry programs the gate rejects.
  */
-const STRATEGY_CACHE_VERSION = "strategy-intent-v7-expression-decisions";
+const STRATEGY_CACHE_VERSION = "strategy-intent-v9-lagged-price";
 let strategySchemaReady: Promise<unknown> | null = null;
 
 interface AnalyzeBody {
@@ -52,7 +61,7 @@ You are ProofTrade's strategy-intent engine. Convert a user's crypto trading ide
 Choose exactly one status:
 - ready: entry, direction, evaluation timeframe, position sizing and stop loss are all explicit enough to program.
 - needs_clarification: the request is a strategy but execution-critical facts are missing or ambiguous.
-- unsupported: the meaning is clear but requires capabilities outside OHLCV, funding rate, open interest, SMA, EMA, RSI, MACD, ATR, Bollinger Bands, highest/lowest, percent change, safe + - * / arithmetic, 1m/15m/1h/4h closed-bar data, long/short, fixed-notional/equity-percent/risk-percent sizing, and a stop or risk/reward take profit that is either a constant or computed from the indicators and market fields above (for example an ATR-sized stop).
+- unsupported: the meaning is clear but requires capabilities outside OHLCV, funding rate, open interest, SMA, EMA, RSI, MACD, ATR, Bollinger Bands, highest/lowest, percent change, safe + - * / arithmetic, 1m/15m/1h/4h closed-bar data, long/short, fixed-notional/equity-percent/risk-percent sizing, closing a stated share of the position, and a stop or risk/reward take profit that is either a constant or computed from the indicators and market fields above (for example an ATR-sized stop).
 
 Rules:
 - all user-visible text must be written in the required output language supplied with the request. This includes strategyName, summary, resolvedIntent, clarificationQuestions, unsupportedCapabilities, assumptions and warnings;
@@ -77,6 +86,7 @@ Program requirements, all mandatory:
 - onBar receives the context and returns a StrategyDecision object; it never calls helpers such as openLong or closePosition, and it never declares indicators in a context field;
 - read indicators through context.indicators.<name>(...) calls inside onBar, for example ctx.indicators.rsi("close", 14);
 - indicator calls return number | null during warm-up: store the result in a local variable, check that variable for null once, and reuse the narrowed variable;
+- market fields have no lagged form: a previous bar's price is an indicator of period 1 at that offset, so the previous close is ctx.indicators.sma("close", 1, 1) in the program and sma("close",1,1) in the contract. Never read ctx.history for a value a condition compares — a history window is not expressible as a contract operand, and the program is compiled with strict and noUncheckedIndexedAccess, so indexing one yields number | undefined and a === null check alone does not compile;
 - signals come only from closed-bar context; execution occurs on the next bar;
 - every open decision defines a positive stopLossPercent;
 - never add network, files, time, randomness, exchange access, credentials, imports, loops, mutation, eval, or unsupported APIs.
@@ -106,10 +116,11 @@ defineStrategy({
     - macd("close",12,26,9,0).histogram > 0
     - bollingerBands("close",20,2,0).lower > market.close
     - highest("high",20,1) < market.close (lowest is also supported)
+    - sma("close",1,1) < bollingerBands("close",20,2,1).lower — period 1 at an offset is how a previous bar's price is written; "the bar before it broke below and this one closed back above" is that operand plus market.close on the current bar
     - market.close <= highest("high",100,1) * 0.5
     - numeric operands may use parentheses and safe +, -, *, / arithmetic; never use arbitrary code or functions
     - crossAbove(ema("close",20,0),ema("close",20,1),ema("close",50,0),ema("close",50,1)); use crossBelow for the reverse
-    - for a higher data timeframe, prefix every operand, for example timeframe("1h").rsi("close",14,0) < 30
+    - for a higher data timeframe, prefix every operand, for example timeframe("1h").rsi("close",14,0) < 30. Never prefix with the contract's own timeframe: contract.timeframe already states which bars the strategy runs on, and ctx.timeframe(<that same interval>) is null at run time, so a program reading its own timeframe through it holds forever. A 4h strategy writes market.close and rsi("close",14,0), never timeframe("4h").market.close
     Never put prose, reasons, warm-up checks or invented aliases in contract.when. Percentages are decimal fractions: 1% is 0.01. Level comparisons are not crossing events. Every decision field is required and unused fields are null.
     stopLossPercent and takeProfitRiskReward are quantified the same way a condition operand is. Emit a JSON number when the value is constant, and a canonical expression string when the program computes it, using the same indicator and market notation as contract.when with safe + - * / and parentheses. The expression must be exactly what the program computes, because it is checked against the program:
     - a fixed 5% stop is 0.05
@@ -118,8 +129,18 @@ defineStrategy({
     Never round a computed stop into a constant, and never state a constant the program does not use.
     Position sizing semantics are strict: "50% of account balance/equity as position notional" is sizeKind equityPercent with sizeValue 0.5; "risk 1% of account per trade" is riskPercent with sizeValue 0.01; an absolute quote-currency amount is fixedNotional. Never substitute one sizing meaning for another. A percentage take profit is represented as takeProfitRiskReward divided by stop loss: 10% take profit with 5% stop loss is 2.
 
+    A close decision may take off part of the position instead of all of it ("平仓一半", "止盈一半", "take half off", scale out):
+    - the program returns { type: "close", fraction: 0.5 } and the contract decision sets closeFraction to the same constant, with every other close field null;
+    - closeFraction is a share of the quantity still open, in (0,1]. "Half, then half of what remains" is two rules of 0.5. Use null, never 1, for a whole-position exit;
+    - the fraction is a constant. An exit share the program computes is not representable and must be reported unsupported;
+    - a partial exit must fire at most once per position, or it repeats on every bar its condition holds and bleeds the position away. Guard it with ctx.state: set a flag when the leg fires, reset it on the open decision, and state the guard in contract.when as state.<key> == 0. Never emit an unguarded partial exit;
+    - contract rules are an unordered set, so a partial exit and the full exit must never both match the same bar. Bound the partial leg on both sides, in the program and in contract.when alike. The program's if-order is not recorded in the contract and cannot be relied on.
+    Scaling out of a long at the middle Bollinger band and closing the rest at the upper band is two close rules:
+    - closeFraction 0.5, when market.close > bollingerBands("close",20,2,0).middle, market.close <= bollingerBands("close",20,2,0).upper, state.scaledOut == 0;
+    - closeFraction null, when market.close > bollingerBands("close",20,2,0).upper.
+
     Return one JSON object only:
-    {"status":"ready|needs_clarification|unsupported","strategyName":"short name","summary":"plain-language result","resolvedIntent":"string or null","clarificationQuestions":[],"unsupportedCapabilities":[],"assumptions":[],"warnings":[],"contract":{"schemaVersion":"1.0","timeframe":"1m|15m|1h|4h","rules":[{"when":["position.side == \\"flat\\"","rsi(\\"close\\",14,0) < 30"],"decision":{"type":"open|close","side":"long|short|null","sizeKind":"riskPercent|equityPercent|fixedNotional|null","sizeValue":0.01,"stopLossPercent":0.05,"takeProfitRiskReward":null}}],"unsupportedCapabilities":[]},"source":"defineStrategy({...}) or empty"}
+    {"status":"ready|needs_clarification|unsupported","strategyName":"short name","summary":"plain-language result","resolvedIntent":"string or null","clarificationQuestions":[],"unsupportedCapabilities":[],"assumptions":[],"warnings":[],"contract":{"schemaVersion":"1.0","timeframe":"1m|15m|1h|4h","rules":[{"when":["position.side == \\"flat\\"","rsi(\\"close\\",14,0) < 30"],"decision":{"type":"open|close","side":"long|short|null","sizeKind":"riskPercent|equityPercent|fixedNotional|null","sizeValue":0.01,"stopLossPercent":0.05,"takeProfitRiskReward":null,"closeFraction":null}}],"unsupportedCapabilities":[]},"source":"defineStrategy({...}) or empty"}
 `.trim();
 
 async function ensureSchema(db: D1Database): Promise<void> {
@@ -211,16 +232,19 @@ function ownershipClause(identity: Identity): { sql: string; bindings: string[] 
  *
  * The strategy model reasons before answering and the budget covers the
  * reasoning as well as the visible answer, so a long chain of thought can leave
- * the JSON cut off mid-string. At 5000 that happened on a `ready` result, which
- * carries a whole defineStrategy program inside a JSON string. 8000 is what the
- * CLI provider (`src/studio/deepseek-provider.ts`) already uses against this
- * same model for the same job, so it is the raise that is known to be accepted
- * rather than a guess at the model's ceiling. The override exists because that
- * ceiling depends on the deployed model and base URL, which are configurable.
+ * the JSON cut off mid-string — or, when the budget runs out before the answer
+ * starts, leave no JSON at all. At 5000 that happened on a `ready` result, which
+ * carries a whole defineStrategy program inside a JSON string. 8000 was not
+ * enough either: a scale-out strategy ("中轨平一半，上轨全平") measured 6237
+ * completion tokens, 5096 of them reasoning, which leaves a run with a slightly
+ * longer chain of thought nothing to answer with. 16000 restores the headroom.
+ * The cap only bounds a generation, it is not a spend, so the cost of the raise
+ * is paid only by the runs that need it. The override exists because the ceiling
+ * depends on the deployed model and base URL, which are configurable.
  */
 function strategyMaxTokens(env: StrategyEnv): number {
   const configured = Number(env.DEEPSEEK_MAX_TOKENS);
-  return Number.isInteger(configured) && configured > 0 ? configured : 8_000;
+  return Number.isInteger(configured) && configured > 0 ? configured : 16_000;
 }
 
 function extractJson(text: string): Record<string, unknown> {
@@ -267,7 +291,11 @@ type VerifyCheck = { id: string; label: string; status: "passed" | "failed" | "n
 type VerifyGateResult =
   | { outcome: "passed"; check: VerifyCheck }
   | { outcome: "unsupported"; unsupported: string[]; check: VerifyCheck }
-  | { outcome: "failed"; check: VerifyCheck }
+  // A rejection carries why and what said so: `reason` separates a program that
+  // does not compile from one that disagrees with its contract — two faults with
+  // nothing in common except that the model caused both — and `diagnostics` is
+  // what the repair round hands back to the model.
+  | { outcome: "failed"; reason: "compile" | "semantics"; diagnostics: string[]; check: VerifyCheck }
   | { outcome: "unavailable"; check: VerifyCheck };
 
 const verifyLabel = (outputLanguage: "zh-CN" | "en") =>
@@ -301,7 +329,14 @@ async function verifyArtifact(
   if (!env.BACKTEST_SERVICE_URL) return null;
   const source = typeof artifact.source === "string" ? artifact.source : "";
   const contract = artifact.contract as Record<string, unknown> | null;
-  if (!source || !contract) return { outcome: "failed", check: { id: "verify", label: verifyLabel(outputLanguage), status: "failed", detail: outputLanguage === "zh-CN" ? "策略程序缺失" : "Strategy program missing" } };
+  if (!source || !contract) {
+    return {
+      outcome: "failed",
+      reason: "compile",
+      diagnostics: ["The artifact carries no program or no contract."],
+      check: { id: "verify", label: verifyLabel(outputLanguage), status: "failed", detail: outputLanguage === "zh-CN" ? "策略程序缺失" : "Strategy program missing" },
+    };
+  }
   const baseUrl = env.BACKTEST_SERVICE_URL.replace(/\/+$/, "");
   let response: Response;
   try {
@@ -348,14 +383,30 @@ async function verifyArtifact(
   // has to land somewhere an operator can read it. The customer sees a stable
   // code; without this the diagnostics that explain which rule or scenario
   // disagreed are computed by the service and then dropped on the floor.
+  const diagnostics = payload.diagnostics?.map((item) => `${item.code}: ${item.message}`) ?? [];
   console.warn("[verify] gate rejected a ready artifact", JSON.stringify({
     strategyName: artifact.strategyName,
     compiled: payload.compiled?.ok,
     semantics: payload.semantics?.ok,
     scenarios: `${payload.semantics?.scenarioPassed ?? "?"}/${payload.semantics?.scenarioCount ?? "?"}`,
-    diagnostics: payload.diagnostics?.map((item) => `${item.code}: ${item.message}`) ?? [],
+    diagnostics,
   }));
-  return { outcome: "failed", check: { id: "verify", label: verifyLabel(outputLanguage), status: "failed", detail: outputLanguage === "zh-CN" ? "程序与契约核对不一致" : "Program and contract are inconsistent" } };
+  // A program that never compiled was never compared against its contract, so
+  // reporting it as a contract disagreement describes a check that did not run.
+  const reason = payload.compiled?.ok === false ? "compile" : "semantics";
+  return {
+    outcome: "failed",
+    reason,
+    diagnostics,
+    check: {
+      id: "verify",
+      label: verifyLabel(outputLanguage),
+      status: "failed",
+      detail: reason === "compile"
+        ? (outputLanguage === "zh-CN" ? "策略程序无法编译" : "Strategy program does not compile")
+        : (outputLanguage === "zh-CN" ? "程序与契约核对不一致" : "Program and contract are inconsistent"),
+    },
+  };
 }
 
 function structuralChecks(artifact: Record<string, unknown>) {
@@ -377,6 +428,111 @@ function structuralChecks(artifact: Record<string, unknown>) {
       detail: artifact.status === "ready" ? "未发现网络、进程、动态执行或导入调用" : "当前处理动作不生成程序",
     },
   ];
+}
+
+interface ArtifactRequest {
+  model: string;
+  intent: string;
+  asset: string;
+  market: string;
+  outputLanguage: "zh-CN" | "en";
+  /** Set on the second round: the rejected program and what the gate said about it. */
+  repair?: { source: string; diagnostics: string[] };
+}
+
+type ArtifactAttempt =
+  | { ok: true; artifact: Record<string, unknown>; responseId: string | null }
+  | { ok: false; response: Response };
+
+/**
+ * One generation round. Extracted from `analyze` so the repair round runs the
+ * identical request path — same prompt, same budget, same failure taxonomy —
+ * with the diagnostics appended, instead of a second hand-rolled copy of it.
+ */
+async function requestStrategyArtifact(env: StrategyEnv, options: ArtifactRequest): Promise<ArtifactAttempt> {
+  if (!env.DEEPSEEK_API_KEY) return { ok: false, response: fail("SERVICE_NOT_CONFIGURED", 503) };
+  const apiKey = env.DEEPSEEK_API_KEY.startsWith("sk-") ? env.DEEPSEEK_API_KEY : `sk-${env.DEEPSEEK_API_KEY}`;
+  const language = options.outputLanguage === "zh-CN" ? "Simplified Chinese (zh-CN)" : "English (en)";
+  const task = `Required user-visible output language: ${language}\nAsset: ${options.asset}\nMarket: ${options.market}\n\nUser strategy intent:\n${options.intent}`;
+  const repair = options.repair;
+  const response = await fetch(`${(env.DEEPSEEK_BASE_URL || "https://api.deepseek.com").replace(/\/$/, "")}/chat/completions`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      model: options.model,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: repair
+            ? `${task}\n\nYour previous answer was rejected: the program below failed the compiler and contract gate. Return the same JSON object again with the program corrected. Keep the customer's meaning, keep contract and program describing the same rules, and change nothing the diagnostics do not require.\n\nRejected program:\n${repair.source}\n\nDiagnostics:\n${repair.diagnostics.map((item) => `- ${item}`).join("\n")}`
+            : task,
+        },
+      ],
+      response_format: { type: "json_object" },
+      max_tokens: strategyMaxTokens(env),
+      stream: false,
+    }),
+  });
+  if (!response.ok) return { ok: false, response: fail("MODEL_UNAVAILABLE", 502) };
+  const completion = await response.json() as {
+    id?: string;
+    choices?: Array<{ message?: { content?: string; reasoning_content?: string }; finish_reason?: string }>;
+    usage?: { completion_tokens?: number; completion_tokens_details?: { reasoning_tokens?: number } };
+  };
+  const choice = completion.choices?.[0];
+  const content = choice?.message?.content;
+  // A truncated answer is not malformed model output, it is a budget we set
+  // too low. Saying so keeps it out of the generic 500 bucket and tells the
+  // customer that retrying is worthwhile.
+  //
+  // This has to be checked before the empty-content case, not after it. The
+  // model reasons first and answers second, so a budget that runs out during
+  // the reasoning returns 200 with `content: ""` and finish_reason "length" —
+  // the exact failure a bigger budget fixes, reported for months as "the
+  // model returned no strategy result", which points the customer at nothing.
+  if (choice?.finish_reason === "length") {
+    console.warn("[analyze] model answer hit the token budget", JSON.stringify({
+      model: options.model,
+      repair: Boolean(repair),
+      budget: strategyMaxTokens(env),
+      characters: content?.length ?? 0,
+      completionTokens: completion.usage?.completion_tokens,
+      reasoningTokens: completion.usage?.completion_tokens_details?.reasoning_tokens,
+    }));
+    return { ok: false, response: fail("MODEL_RESPONSE_TRUNCATED", 502, undefined, 5) };
+  }
+  // Whatever remains is an answer the model ended on its own terms while
+  // saying nothing. It is rare enough that the log is the only way to tell it
+  // apart from the truncation above once a customer reports it.
+  if (!content) {
+    console.warn("[analyze] model returned no content", JSON.stringify({
+      model: options.model,
+      repair: Boolean(repair),
+      finishReason: choice?.finish_reason,
+      reasoningCharacters: choice?.message?.reasoning_content?.length ?? 0,
+      completionTokens: completion.usage?.completion_tokens,
+    }));
+    return { ok: false, response: fail("EMPTY_MODEL_RESULT", 502) };
+  }
+  // Malformed or incomplete model output is an upstream fault, not an
+  // internal one: it says nothing about this request that a 500 would let the
+  // customer act on, and the underlying parser message belongs in the log
+  // rather than in the generic error bucket.
+  try {
+    const artifact = extractJson(content);
+    validateArtifact(artifact);
+    enforceEntryConditionFloor(artifact, options.outputLanguage);
+    return { ok: true, artifact, responseId: completion.id ?? null };
+  } catch (error) {
+    console.warn("[analyze] model answer could not be used", JSON.stringify({
+      model: options.model,
+      repair: Boolean(repair),
+      characters: content.length,
+      reason: error instanceof Error ? error.message : String(error),
+    }));
+    return { ok: false, response: fail("MODEL_RESPONSE_INVALID", 502, undefined, 5) };
+  }
 }
 
 async function analyze(request: Request, env: StrategyEnv, identity: Identity): Promise<Response> {
@@ -418,67 +574,10 @@ async function analyze(request: Request, env: StrategyEnv, identity: Identity): 
     await env.DB.prepare("UPDATE strategy_artifact_cache SET hit_count = hit_count + 1, last_hit_at = ? WHERE cache_key = ?")
       .bind(new Date().toISOString(), cacheKey).run();
   } else {
-    if (!env.DEEPSEEK_API_KEY) return fail("SERVICE_NOT_CONFIGURED", 503);
-    const apiKey = env.DEEPSEEK_API_KEY.startsWith("sk-")
-      ? env.DEEPSEEK_API_KEY
-      : `sk-${env.DEEPSEEK_API_KEY}`;
-    const response = await fetch(`${(env.DEEPSEEK_BASE_URL || "https://api.deepseek.com").replace(/\/$/, "")}/chat/completions`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: `Required user-visible output language: ${outputLanguage === "zh-CN" ? "Simplified Chinese (zh-CN)" : "English (en)"}\nAsset: ${asset}\nMarket: ${market}\n\nUser strategy intent:\n${intent}`,
-          },
-        ],
-        response_format: { type: "json_object" },
-        max_tokens: strategyMaxTokens(env),
-        stream: false,
-      }),
-    });
-    if (!response.ok) return fail("MODEL_UNAVAILABLE", 502);
-    const completion = await response.json() as {
-      id?: string;
-      choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
-      usage?: unknown;
-    };
-    const choice = completion.choices?.[0];
-    const content = choice?.message?.content;
-    if (!content) return fail("EMPTY_MODEL_RESULT", 502);
-    // A truncated answer is not malformed model output, it is a budget we set
-    // too low. Saying so keeps it out of the generic 500 bucket and tells the
-    // customer that retrying is worthwhile.
-    if (choice?.finish_reason === "length") {
-      console.warn("[analyze] model answer hit the token budget", JSON.stringify({ model, characters: content.length }));
-      return fail("MODEL_RESPONSE_TRUNCATED", 502, undefined, 5);
-    }
-    // Malformed or incomplete model output is an upstream fault, not an
-    // internal one: it says nothing about this request that a 500 would let the
-    // customer act on, and the underlying parser message belongs in the log
-    // rather than in the generic error bucket.
-    try {
-      artifact = extractJson(content);
-      validateArtifact(artifact);
-    } catch (error) {
-      console.warn("[analyze] model answer could not be used", JSON.stringify({
-        model,
-        characters: content.length,
-        reason: error instanceof Error ? error.message : String(error),
-      }));
-      return fail("MODEL_RESPONSE_INVALID", 502, undefined, 5);
-    }
-    enforceEntryConditionFloor(artifact, outputLanguage);
-    responseId = completion.id ?? null;
-    const now = new Date().toISOString();
-    await env.DB.prepare(`INSERT INTO strategy_artifact_cache
-      (cache_key, created_at, last_hit_at, hit_count, model, prompt_version, result_json)
-      VALUES (?, ?, ?, 0, ?, ?, ?)
-      ON CONFLICT(cache_key) DO UPDATE SET last_hit_at = excluded.last_hit_at, model = excluded.model,
-        prompt_version = excluded.prompt_version, result_json = excluded.result_json`)
-      .bind(cacheKey, now, now, model, STRATEGY_CACHE_VERSION, JSON.stringify(artifact)).run();
+    const attempt = await requestStrategyArtifact(env, { model, intent, asset, market, outputLanguage });
+    if (!attempt.ok) return attempt.response;
+    artifact = attempt.artifact;
+    responseId = attempt.responseId;
   }
   // Semantic admission gate: a `ready` artifact must pass the service's
   // program↔contract verification before it is persisted as runnable, so the
@@ -486,10 +585,48 @@ async function analyze(request: Request, env: StrategyEnv, identity: Identity): 
   // never drift apart. Only the substring structural checks fall back (service
   // unconfigured or unreachable).
   let verifyOutcome: VerifyGateResult | null = null;
+  let repairAttempts = 0;
   if (artifact.status === "ready") {
     verifyOutcome = await verifyArtifact(env, artifact, outputLanguage);
+    // A rejected program is the model's mistake, not a defect in what the
+    // customer wrote, and the gate is strict enough that a single misplaced
+    // `undefined` check ends the request. Telling the customer to reword a
+    // description that was already understood correctly asks them to fix
+    // something they cannot see, so the diagnostics go back to the model for one
+    // repair round first — the same loop the CLI studio has always run, which is
+    // why the same intent succeeds there and failed here.
+    if (verifyOutcome?.outcome === "failed" && cacheStatus === "miss" && typeof artifact.source === "string") {
+      console.warn("[analyze] repairing a rejected program", JSON.stringify({
+        model,
+        reason: verifyOutcome.reason,
+        diagnostics: verifyOutcome.diagnostics,
+      }));
+      const repaired = await requestStrategyArtifact(env, {
+        model,
+        intent,
+        asset,
+        market,
+        outputLanguage,
+        repair: { source: artifact.source, diagnostics: verifyOutcome.diagnostics },
+      });
+      if (repaired.ok && repaired.artifact.status === "ready") {
+        const second = await verifyArtifact(env, repaired.artifact, outputLanguage);
+        if (second && second.outcome !== "failed") {
+          artifact = repaired.artifact;
+          responseId = repaired.responseId;
+          verifyOutcome = second;
+          repairAttempts = 1;
+        }
+      }
+    }
     if (verifyOutcome?.outcome === "failed") {
-      return fail("STRATEGY_VERIFY_FAILED", 422);
+      // A program that does not compile and a program that contradicts its
+      // contract are different failures with different advice, and neither is
+      // worth a code that reads as "your description is wrong".
+      return fail(
+        verifyOutcome.reason === "compile" ? "STRATEGY_PROGRAM_INVALID" : "STRATEGY_VERIFY_FAILED",
+        422, undefined, 5,
+      );
     }
     // A `ready` artifact that was never verified cannot be persisted: the
     // service is the only engine, so an unverified program would surface as a
@@ -509,6 +646,21 @@ async function analyze(request: Request, env: StrategyEnv, identity: Identity): 
         unsupportedCapabilities: [...new Set([...existing, ...labels])],
       };
     }
+  }
+  // Banking the artifact happens here, after the gate, and never before it.
+  // Caching it at generation time meant a rejected program was stored under the
+  // customer's own words: every retry of that same description replayed the
+  // artifact the gate had already refused, so "please adjust and retry" was
+  // advice the cache made impossible to follow — only editing the text could
+  // ever produce a different answer.
+  if (cacheStatus === "miss") {
+    const now = new Date().toISOString();
+    await env.DB.prepare(`INSERT INTO strategy_artifact_cache
+      (cache_key, created_at, last_hit_at, hit_count, model, prompt_version, result_json)
+      VALUES (?, ?, ?, 0, ?, ?, ?)
+      ON CONFLICT(cache_key) DO UPDATE SET last_hit_at = excluded.last_hit_at, model = excluded.model,
+        prompt_version = excluded.prompt_version, result_json = excluded.result_json`)
+      .bind(cacheKey, now, now, model, STRATEGY_CACHE_VERSION, JSON.stringify(artifact)).run();
   }
   const intentCheck: VerifyCheck = { id: "intent", label: "意图结构化", status: "passed", detail: "处理动作与解释字段完整" };
   // `failed` and `unavailable` already returned, so a gate result reaching here
@@ -530,7 +682,7 @@ async function analyze(request: Request, env: StrategyEnv, identity: Identity): 
     contract: artifact.contract,
     source: artifact.source,
     checks,
-    generation: { model, latencyMs, responseId, cacheStatus },
+    generation: { model, latencyMs, responseId, cacheStatus, repairAttempts },
   };
   await env.DB.prepare(`INSERT INTO strategy_submissions
     (id, user_id, session_id, created_at, intent, market, asset, status, model, result_json, latency_ms, title)

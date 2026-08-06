@@ -118,31 +118,64 @@ export async function runBacktest(
     ]),
   ) as Partial<Record<StrategyTimeframe, MarketBar[]>>;
 
-  const closePosition = (bar: MarketBar, rawPrice: number, reason: string): void => {
+  /**
+   * Closes `fraction` of the open position, defaulting to all of it.
+   *
+   * A scale-out has to split the costs the position has already accrued, or the
+   * first leg would book the whole entry fee and the remainder would look like a
+   * free position. Entry fee, entry slippage and funding accrued so far are
+   * therefore prorated by the share being closed, and the position keeps the
+   * rest along with its original entry price, stop and target. Cash is not
+   * touched by that split: those costs were already paid when they happened, and
+   * this only decides which trade record carries them.
+   */
+  const closePosition = (bar: MarketBar, rawPrice: number, reason: string, fraction = 1): void => {
     if (!position) return;
+    const share = Math.min(1, Math.max(0, fraction));
+    if (share <= 0) return;
+    const quantity = position.quantity * share;
+    const remainingQuantity = position.quantity - quantity;
+    // A leftover far below any tradable size is dust the next leg would divide
+    // by, so a share that rounds to the whole position closes it outright.
+    const closesAll = remainingQuantity <= position.quantity * 1e-9;
     const closingSide = position.side === "long" ? "sell" : "buy";
     const exitPrice = withSlippage(rawPrice, closingSide, config.slippageBps);
-    const exitSlippageCost = Math.abs(exitPrice - rawPrice) * position.quantity;
+    const closedQuantity = closesAll ? position.quantity : quantity;
+    const closedShare = closesAll ? 1 : share;
+    const exitSlippageCost = Math.abs(exitPrice - rawPrice) * closedQuantity;
     const direction = position.side === "long" ? 1 : -1;
-    const grossPnl = direction * (exitPrice - position.entryPrice) * position.quantity;
-    const exitFee = exitPrice * position.quantity * config.takerFeeRate;
+    const grossPnl = direction * (exitPrice - position.entryPrice) * closedQuantity;
+    const exitFee = exitPrice * closedQuantity * config.takerFeeRate;
     cash += grossPnl - exitFee;
-    const fees = position.entryFee + exitFee;
+    const entryFee = position.entryFee * closedShare;
+    const entrySlippageCost = position.entrySlippageCost * closedShare;
+    const fundingPnl = position.fundingPnl * closedShare;
+    const fees = entryFee + exitFee;
     trades.push({
       side: position.side,
       entryTimestamp: position.entryTimestamp,
       exitTimestamp: bar.timestamp,
       entryPrice: position.entryPrice,
       exitPrice,
-      quantity: position.quantity,
+      quantity: closedQuantity,
       grossPnl,
-      fundingPnl: position.fundingPnl,
+      fundingPnl,
       fees,
-      slippageCost: position.entrySlippageCost + exitSlippageCost,
-      netPnl: grossPnl + position.fundingPnl - fees,
+      slippageCost: entrySlippageCost + exitSlippageCost,
+      netPnl: grossPnl + fundingPnl - fees,
       exitReason: reason,
     });
-    position = null;
+    if (closesAll) {
+      position = null;
+      return;
+    }
+    position = {
+      ...position,
+      quantity: remainingQuantity,
+      entryFee: position.entryFee - entryFee,
+      entrySlippageCost: position.entrySlippageCost - entrySlippageCost,
+      fundingPnl: position.fundingPnl - fundingPnl,
+    };
   };
 
   try {
@@ -177,7 +210,7 @@ export async function runBacktest(
                 : entryPrice + direction * stopDistance * pendingDecision.takeProfitRiskReward,
           };
         } else if (pendingDecision?.type === "close" && position) {
-          closePosition(bar, bar.open, pendingDecision.reason ?? "strategy");
+          closePosition(bar, bar.open, pendingDecision.reason ?? "strategy", pendingDecision.fraction ?? 1);
         }
       }
       pendingDecision = null;

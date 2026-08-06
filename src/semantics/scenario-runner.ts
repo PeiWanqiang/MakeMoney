@@ -3,6 +3,7 @@ import type { RuntimePosition, StrategyDecision } from "../core/types.js";
 import { StrategySandboxSession, type StrategySemanticScenario } from "../runtime/sandbox.js";
 import {
   canonicalDecision,
+  normalizeCloseFraction,
   type ContractDecision,
   type ContractValue,
   type ContractRule,
@@ -10,6 +11,7 @@ import {
   type SemanticScenarioResult,
   type StrategyContract,
 } from "./contract.js";
+import { extractIndicatorOperands } from "./extract-semantics.js";
 import {
   evaluateNumericExpression,
   expressionOperands,
@@ -118,12 +120,13 @@ function applyCompositeComparison(
   operator: string,
   right: string,
   satisfied: boolean,
+  pinned: ReadonlySet<string> = new Set(),
 ): boolean {
   const leftOperands = expressionOperands(left);
   const rightOperands = expressionOperands(right);
   const shared = new Set(leftOperands.filter((operand) => rightOperands.includes(operand)));
   const candidates = [...leftOperands, ...rightOperands]
-    .filter((operand) => !shared.has(operand) && isSettableOperand(operand));
+    .filter((operand) => !shared.has(operand) && !pinned.has(operand) && isSettableOperand(operand));
 
   const matches = (): boolean => {
     const environment = scenarioEnvironment(scenario);
@@ -232,7 +235,23 @@ function comparisonValues(operator: string, satisfied: boolean): [number, number
   return [1, 1];
 }
 
-function applyCondition(scenario: StrategySemanticScenario, condition: string, satisfied: boolean): boolean {
+/**
+ * Steers one condition to the wanted truth value, recording every operand it
+ * writes in `pinned`.
+ *
+ * Conditions are applied in sequence, so an operand two of them share would be
+ * overwritten by whichever ran last: `close > middle` assigns close, then
+ * `close <= upper` reassigns it and breaks the first. A rule bounding a value
+ * from both sides — which is how a scale-out leg stays exclusive with the full
+ * exit — could therefore never be satisfied. An operand an earlier condition
+ * already set is treated as fixed, and the remaining ones are solved around it.
+ */
+function applyCondition(
+  scenario: StrategySemanticScenario,
+  condition: string,
+  satisfied: boolean,
+  pinned: Set<string> = new Set(),
+): boolean {
   const cross = /^(crossAbove|crossBelow)\((.*)\)$/.exec(condition);
   if (cross) {
     const args = splitTopLevel(cross[2] ?? "");
@@ -241,7 +260,10 @@ function applyCondition(scenario: StrategySemanticScenario, condition: string, s
     const values = satisfied
       ? above ? [3, 1, 2, 2] : [1, 3, 2, 2]
       : above ? [1, 3, 2, 2] : [3, 1, 2, 2];
-    args.forEach((operand, index) => setOperand(scenario, operand, values[index] ?? 0));
+    args.forEach((operand, index) => {
+      setOperand(scenario, operand, values[index] ?? 0);
+      pinned.add(compactOperand(operand));
+    });
     return true;
   }
   const comparison = /^(.+?)(==|!=|<=|>=|<|>)(.+)$/.exec(condition);
@@ -252,12 +274,20 @@ function applyCondition(scenario: StrategySemanticScenario, condition: string, s
   const literal = parsedLiteral(right);
   if (typeof literal === "string") {
     setOperand(scenario, left, satisfied === (operator === "==") ? literal : literal === "flat" ? "long" : "flat");
+    pinned.add(compactOperand(left));
     return true;
   }
-  // A side that computes a value cannot be assigned one, so it is solved for
-  // instead. Conditions naming a value on both sides keep the direct path below.
-  if (isCompositeExpression(left) || isCompositeExpression(right)) {
-    return applyCompositeComparison(scenario, left, operator, right, satisfied);
+  const operands = [...expressionOperands(left), ...expressionOperands(right)];
+  const remember = (): void => {
+    for (const operand of operands) pinned.add(operand);
+  };
+  // A side that computes a value cannot be assigned one, and neither can an
+  // operand an earlier condition fixed, so both are solved for instead.
+  // Conditions naming a free value on each side keep the direct path below.
+  if (isCompositeExpression(left) || isCompositeExpression(right) || operands.some((operand) => pinned.has(operand))) {
+    const solved = applyCompositeComparison(scenario, left, operator, right, satisfied, pinned);
+    if (solved) remember();
+    return solved;
   }
   if (literal !== undefined) {
     const delta = Math.max(1, Math.abs(literal) * 0.1);
@@ -267,18 +297,28 @@ function applyCondition(scenario: StrategySemanticScenario, condition: string, s
         ? satisfied ? literal - delta : literal + delta
         : satisfied === (operator === "==") ? literal : literal + delta;
     setOperand(scenario, left, candidate);
+    remember();
     return true;
   }
   const [leftValue, rightValue] = comparisonValues(operator, satisfied);
   setOperand(scenario, left, leftValue);
   setOperand(scenario, right, rightValue);
+  remember();
   return true;
 }
 
 function expectedDecision(actual: StrategyDecision): ContractDecision | undefined {
   if (actual.type === "hold") return undefined;
   if (actual.type === "close") {
-    return { type: "close", side: null, sizeKind: null, sizeValue: null, stopLossPercent: null, takeProfitRiskReward: null };
+    return {
+      type: "close",
+      side: null,
+      sizeKind: null,
+      sizeValue: null,
+      stopLossPercent: null,
+      takeProfitRiskReward: null,
+      closeFraction: normalizeCloseFraction(actual.fraction),
+    };
   }
   return {
     type: "open",
@@ -287,6 +327,7 @@ function expectedDecision(actual: StrategyDecision): ContractDecision | undefine
     sizeValue: actual.size.value,
     stopLossPercent: actual.stopLossPercent,
     takeProfitRiskReward: actual.takeProfitRiskReward ?? null,
+    closeFraction: null,
   };
 }
 
@@ -313,6 +354,7 @@ function decisionsAgree(contracted: ContractDecision, actual: ContractDecision, 
     && contracted.side === actual.side
     && contracted.sizeKind === actual.sizeKind
     && contracted.sizeValue === actual.sizeValue
+    && normalizeCloseFraction(contracted.closeFraction) === normalizeCloseFraction(actual.closeFraction)
     && valuesAgree(contracted.stopLossPercent, actual.stopLossPercent, environment)
     && valuesAgree(contracted.takeProfitRiskReward, actual.takeProfitRiskReward, environment);
 }
@@ -323,8 +365,8 @@ function decisionsAgree(contracted: ContractDecision, actual: ContractDecision, 
  * condition necessarily mentions, and leaving it unset would make the program
  * hold on a null guard instead of exercising the rule.
  */
-function indicatorOperands(contract: StrategyContract): string[] {
-  const operands = new Set<string>();
+function indicatorOperands(contract: StrategyContract, programOperands: string[]): string[] {
+  const operands = new Set<string>(programOperands);
   const pattern = /(?:timeframe\("(?:1m|15m|1h|4h)"\)\.)?(?:sma|ema|highest|lowest|percentChange|standardDeviation|rsi|atr|macd|bollingerBands)\([^)]*\)(?:\.(?:macd|signal|histogram|middle|upper|lower))?/g;
   const scan = (text: string): void => {
     for (const match of text.matchAll(pattern)) operands.add(match[0]);
@@ -335,10 +377,12 @@ function indicatorOperands(contract: StrategyContract): string[] {
       if (typeof value === "string") scan(value);
     }
   }
-  return [...operands];
+  // Shortest first: a plain `bollingerBands(...)` seed must land before the
+  // `.lower` form replaces the number with an object carrying that field.
+  return [...operands].sort((left, right) => left.length - right.length);
 }
 
-function baseScenario(rule: ContractRule, contract: StrategyContract): StrategySemanticScenario {
+function baseScenario(rule: ContractRule, contract: StrategyContract, programOperands: string[]): StrategySemanticScenario {
   const scenario: StrategySemanticScenario = {
     market: { timestamp: 0, open: 100, high: 101, low: 99, close: 100, volume: 1_000, fundingRate: 0, openInterest: 1_000_000 },
     position: {
@@ -354,9 +398,10 @@ function baseScenario(rule: ContractRule, contract: StrategyContract): StrategyS
     indicators: {},
   };
   // A real strategy commonly calculates several indicators before branching.
-  // Initialize every indicator in the contract so a null guard unrelated to the
-  // condition under test cannot turn a valid semantic scenario into a false hold.
-  for (const operand of indicatorOperands(contract)) setOperand(scenario, operand, 1);
+  // Initialize every indicator the contract names *and* every one the program
+  // reads, so a null guard unrelated to the condition under test cannot turn a
+  // valid semantic scenario into a false hold.
+  for (const operand of indicatorOperands(contract, programOperands)) setOperand(scenario, operand, 1);
   return scenario;
 }
 
@@ -365,12 +410,14 @@ async function runRuleScenario(
   rule: ContractRule,
   ruleIndex: number,
   contract: StrategyContract,
+  programOperands: string[],
   negativeConditionIndex?: number,
 ): Promise<SemanticScenarioResult> {
-  const scenario = baseScenario(rule, contract);
+  const scenario = baseScenario(rule, contract, programOperands);
   const unsupported: string[] = [];
+  const pinned = new Set<string>();
   rule.when.forEach((condition, index) => {
-    if (!applyCondition(scenario, condition, index !== negativeConditionIndex)) unsupported.push(condition);
+    if (!applyCondition(scenario, condition, index !== negativeConditionIndex, pinned)) unsupported.push(condition);
   });
   const result = await session.runSemanticScenario(scenario);
   const actual = expectedDecision(result.decision);
@@ -397,14 +444,15 @@ async function runRuleScenario(
 
 export async function runContractScenarios(source: string, contract: StrategyContract): Promise<SemanticScenarioResult[]> {
   const session = await StrategySandboxSession.create(compileStrategySource(source));
+  const programOperands = extractIndicatorOperands(source);
   const results: SemanticScenarioResult[] = [];
   try {
     for (let ruleIndex = 0; ruleIndex < contract.rules.length; ruleIndex += 1) {
       const rule = contract.rules[ruleIndex];
       if (!rule) continue;
-      results.push(await runRuleScenario(session, rule, ruleIndex, contract));
+      results.push(await runRuleScenario(session, rule, ruleIndex, contract, programOperands));
       for (let conditionIndex = 0; conditionIndex < rule.when.length; conditionIndex += 1) {
-        results.push(await runRuleScenario(session, rule, ruleIndex, contract, conditionIndex));
+        results.push(await runRuleScenario(session, rule, ruleIndex, contract, programOperands, conditionIndex));
       }
     }
   } finally {

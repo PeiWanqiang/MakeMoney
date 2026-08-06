@@ -46,7 +46,16 @@ Never round a computed stop into a constant, and never state a constant the prog
 
 In the audit contract, write direct indicator names such as percentChange(...), never indicators.percentChange(...) or context.indicators.percentChange(...). Use market.close for the current close, never sma("close",1,0). "Prior N-bar high/low" means the OHLC high/low fields and must use highest("high",N,1) or lowest("low",N,1); use the close field only when the user explicitly says highest/lowest close.
 
-Canonical notation is exact: use crossAbove/crossBelow, never crossedAbove/crossedBelow in the audit contract. For multi-timeframe crosses, prefix every indicator operand as shown by the timeframe RSI example; do not write timeframe("1h").crossAbove(...). A close decision must be exactly {"type":"close","side":null,"sizeKind":null,"sizeValue":null,"stopLossPercent":null,"takeProfitRiskReward":null}.
+Canonical notation is exact: use crossAbove/crossBelow, never crossedAbove/crossedBelow in the audit contract. For multi-timeframe crosses, prefix every indicator operand as shown by the timeframe RSI example; do not write timeframe("1h").crossAbove(...). A whole-position close decision must be exactly {"type":"close","side":null,"sizeKind":null,"sizeValue":null,"stopLossPercent":null,"takeProfitRiskReward":null,"closeFraction":null}.
+
+A close decision may take off part of the position instead of all of it:
+- the program returns {"type":"close","fraction":0.5} and the contract sets closeFraction to the same constant; every other close field stays null;
+- closeFraction is a share of the quantity still open, in (0,1]. "Take half off, then half of what remains" is two rules of 0.5. Use null, never 1, for a whole-position exit;
+- the fraction is a constant. A program that computes it is not representable, so an exit sized from anything other than a stated share is unsupported;
+- a partial exit must fire once per position, or it repeats on every bar the condition holds and bleeds the position away. Guard it with context.state: set a flag when the leg fires, reset it on the open decision, and state the guard in the contract as a condition such as state.scaledOut == 0. Never leave a partial exit unguarded;
+- contract rules are an unordered set, so a partial exit and the full exit must not both match the same bar. Bound the partial leg explicitly on both sides, in the program and in the contract alike. Relying on the program's if-order is not enough: the contract does not record it.
+
+Scaling out of a long at the middle band and closing the rest at the upper band is therefore two close rules: the partial one with closeFraction 0.5, conditions market.close > bollingerBands("close",20,2,0).middle, market.close <= bollingerBands("close",20,2,0).upper and state.scaledOut == 0; the full one with closeFraction null and condition market.close > bollingerBands("close",20,2,0).upper.
 
 Preserve level conditions versus crossing events exactly:
 - "above", "below", "高于", "低于" mean a current-value comparison such as market.close > ema(...), not a cross;
@@ -58,7 +67,7 @@ contract.timeframe is the schedule on which onBar runs. If the whole strategy is
 Every context and context.timeframe(...) view contains closed bars only. Offset 0 is the most recent closed bar, offset 1 is the immediately preceding closed bar. Never shift to offsets 1/2 merely because the user emphasized "closed" bars.
 
 Return JSON with exactly these fields:
-{"status":"ready","source":"defineStrategy({...})","contract":{"schemaVersion":"1.0","timeframe":"4h","rules":[{"when":["position.side == \\"flat\\""],"decision":{"type":"open","side":"long","sizeKind":"riskPercent","sizeValue":0.01,"stopLossPercent":0.05,"takeProfitRiskReward":null}}],"unsupportedCapabilities":[]},"clarificationQuestions":[],"explanation":"...","assumptions":["..."],"warnings":[],"changeSummary":"..."}
+{"status":"ready","source":"defineStrategy({...})","contract":{"schemaVersion":"1.0","timeframe":"4h","rules":[{"when":["position.side == \\"flat\\""],"decision":{"type":"open","side":"long","sizeKind":"riskPercent","sizeValue":0.01,"stopLossPercent":0.05,"takeProfitRiskReward":null,"closeFraction":null}}],"unsupportedCapabilities":[]},"clarificationQuestions":[],"explanation":"...","assumptions":["..."],"warnings":[],"changeSummary":"..."}
 `.trim();
 
 function diagnosticsText(request: StrategyProviderRequest): string {

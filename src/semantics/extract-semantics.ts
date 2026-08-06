@@ -6,7 +6,9 @@ import type {
   ContractValue,
   ExtractedStrategySemantics,
 } from "./contract.js";
+import { normalizeCloseFraction } from "./contract.js";
 import { canonicalNumericExpression } from "./expression-ast.js";
+import { isIndicatorOperand, normalizeExpressionText } from "./expression.js";
 
 type Variables = Map<string, ts.Expression>;
 
@@ -36,11 +38,31 @@ function literal(node: ts.Expression | undefined): string | number | null | unde
   return undefined;
 }
 
+/**
+ * Strips `?? null` from an operand.
+ *
+ * Every SDK accessor already returns `T | null`, so `bands?.lower ?? null` is a
+ * defensive no-op — the same value, written by a model that wanted the null to
+ * be explicit. It used to make the operand unreadable, and an unreadable operand
+ * is an opaque condition, which the gate treats as grounds to refuse the whole
+ * strategy. Rejecting a program that says exactly what its contract says, over
+ * punctuation that changes no value, is a false rejection.
+ */
+function unwrapNullishNull(node: ts.Expression): ts.Expression {
+  if (
+    ts.isBinaryExpression(node)
+    && node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+    && node.right.kind === ts.SyntaxKind.NullKeyword
+  ) return unwrapNullishNull(node.left);
+  return node;
+}
+
 function resolve(node: ts.Expression, variables: Variables, seen = new Set<string>()): ts.Expression {
-  if (!ts.isIdentifier(node) || seen.has(node.text)) return node;
-  const replacement = variables.get(node.text);
-  if (!replacement) return node;
-  seen.add(node.text);
+  const value = unwrapNullishNull(node);
+  if (!ts.isIdentifier(value) || seen.has(value.text)) return value;
+  const replacement = variables.get(value.text);
+  if (!replacement) return value;
+  seen.add(value.text);
   return resolve(replacement, variables, seen);
 }
 
@@ -52,20 +74,21 @@ function memberPath(node: ts.Expression): string[] | undefined {
 }
 
 function expandedMemberPath(node: ts.Expression, variables: Variables, seen = new Set<string>()): string[] | undefined {
-  if (ts.isIdentifier(node)) {
-    if (!seen.has(node.text)) {
-      const replacement = variables.get(node.text);
+  const value = unwrapNullishNull(node);
+  if (ts.isIdentifier(value)) {
+    if (!seen.has(value.text)) {
+      const replacement = variables.get(value.text);
       if (replacement) {
-        seen.add(node.text);
+        seen.add(value.text);
         const expanded = expandedMemberPath(replacement, variables, seen);
         if (expanded) return expanded;
       }
     }
-    return [node.text];
+    return [value.text];
   }
-  if (!ts.isPropertyAccessExpression(node)) return undefined;
-  const parent = expandedMemberPath(node.expression, variables, seen);
-  return parent ? [...parent, node.name.text] : undefined;
+  if (!ts.isPropertyAccessExpression(value)) return undefined;
+  const parent = expandedMemberPath(value.expression, variables, seen);
+  return parent ? [...parent, value.name.text] : undefined;
 }
 
 function indicatorCall(
@@ -89,6 +112,16 @@ function isReadinessExpression(node: ts.Expression, variables: Variables): boole
   }
   if (ts.isCallExpression(resolved)) {
     return indicatorCall(resolved, variables) !== undefined || memberPath(resolved.expression)?.at(-1) === "timeframe";
+  }
+  // A warm-up guard is not always written against the call itself. Reading a
+  // band or a MACD leg into its own variable and checking that for null —
+  // `const middle = bands.middle; if (middle !== null)` — is the same guard, but
+  // it used to canonicalize into a comparison against null that no contract can
+  // state, so the program was reported as carrying a rule its contract omitted.
+  // Nothing about a trading rule ever compares an indicator to null.
+  if (ts.isPropertyAccessExpression(resolved)) {
+    const operand = canonicalOperand(resolved, variables);
+    return operand !== undefined && isIndicatorOperand(operand);
   }
   if (!ts.isBinaryExpression(resolved)) return false;
   const comparable = operatorText(resolved.operatorToken.kind);
@@ -152,7 +185,10 @@ function canonicalOperand(node: ts.Expression, variables: Variables): string | u
  * leaf canonicalizer.
  */
 function canonicalExpression(node: ts.Expression, variables: Variables): string | undefined {
-  return canonicalNumericExpression(node, variables, { resolve, leaf: canonicalOperand });
+  const text = canonicalNumericExpression(node, variables, { resolve, leaf: canonicalOperand });
+  // Normalized here as well as on the contract side: the two are compared as
+  // text, so both have to reach the comparison in the same algebraic form.
+  return text === undefined ? undefined : normalizeExpressionText(text);
 }
 
 function operatorText(kind: ts.SyntaxKind): string | undefined {
@@ -227,7 +263,19 @@ function decisionFromReturn(statement: ts.ReturnStatement, variables: Variables)
   const type = literal(objectProperty(statement.expression, "type"));
   if (type !== "open" && type !== "close") return undefined;
   if (type === "close") {
-    return { type, side: null, sizeKind: null, sizeValue: null, stopLossPercent: null, takeProfitRiskReward: null };
+    // A share the grammar cannot read back stays null, which reads as a whole
+    // exit and mismatches a contract that promised a scale-out. Failing that
+    // way round is the safe one: the customer sees the rules disagree instead
+    // of a partial exit silently becoming a full one.
+    return {
+      type,
+      side: null,
+      sizeKind: null,
+      sizeValue: null,
+      stopLossPercent: null,
+      takeProfitRiskReward: null,
+      closeFraction: normalizeCloseFraction(numberProperty(statement.expression, "fraction")),
+    };
   }
   const size = objectProperty(statement.expression, "size");
   const side = literal(objectProperty(statement.expression, "side"));
@@ -244,6 +292,7 @@ function decisionFromReturn(statement: ts.ReturnStatement, variables: Variables)
     sizeValue,
     stopLossPercent: valueProperty(statement.expression, "stopLossPercent", variables),
     takeProfitRiskReward: valueProperty(statement.expression, "takeProfitRiskReward", variables),
+    closeFraction: null,
   };
 }
 
@@ -301,6 +350,37 @@ function findOnBarBody(sourceFile: ts.SourceFile): ts.Block | undefined {
   };
   visit(sourceFile);
   return body;
+}
+
+/**
+ * Every indicator operand the program reads, canonicalized.
+ *
+ * A behavioral scenario seeds indicators so a warm-up guard cannot turn a valid
+ * rule into a hold. Seeding only what the contract names left out the indicators
+ * a program reads and guards but never decides on — `ctx.indicators.rsi("close",
+ * 14)` beside a contracted `rsi("close",14,1)`, say. Those came back null, the
+ * guard held, and a program that agreed with its contract rule for rule was
+ * refused for reading one indicator more than it needed.
+ *
+ * Sorted shortest first so `bollingerBands("close",20,2,0)` is seeded before
+ * `bollingerBands("close",20,2,0).lower` upgrades it to an object.
+ */
+export function extractIndicatorOperands(source: string): string[] {
+  const sourceFile = ts.createSourceFile("strategy.ts", source, ts.ScriptTarget.ES2023, true, ts.ScriptKind.TS);
+  const body = findOnBarBody(sourceFile);
+  if (!body) return [];
+  const variables: Variables = new Map();
+  collectVariables(body, variables);
+  const operands = new Set<string>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) || ts.isPropertyAccessExpression(node)) {
+      const operand = canonicalOperand(node, variables);
+      if (operand !== undefined && isIndicatorOperand(operand)) operands.add(operand);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(body);
+  return [...operands].sort((left, right) => left.length - right.length);
 }
 
 export function extractStrategySemantics(source: string): ExtractedStrategySemantics {

@@ -50,6 +50,17 @@ export interface OpenDecision {
 
 export interface CloseDecision {
   type: "close";
+  /**
+   * Share of the open position to close, in (0,1]. Omitted means the whole
+   * position, which is what every close decision written before scale-out
+   * existed means, so stored programs keep their behavior.
+   *
+   * The share is taken against the quantity still open, not against the
+   * original entry: "take half off, then half of what is left" is two rules
+   * with `fraction: 0.5`, and reading it against the original entry would make
+   * the second one flatten instead.
+   */
+  fraction?: number;
   reason?: string;
 }
 

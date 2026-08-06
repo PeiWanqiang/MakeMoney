@@ -54,6 +54,34 @@ test("projects contract rules into entry and exit cards with plain risk wording"
   assert.equal(rules[1].risk.length, 0);
 });
 
+test("says how much of the position a partial exit closes", () => {
+  const rules = describeRules(zh, [
+    {
+      when: ['position.side == "long"', 'market.close > bollingerBands("close",20,2,0).middle'],
+      decision: { type: "close", side: null, sizeKind: null, sizeValue: null, stopLossPercent: null, takeProfitRiskReward: null, closeFraction: 0.5 },
+    },
+    {
+      when: ['position.side == "long"', 'market.close > bollingerBands("close",20,2,0).upper'],
+      decision: { type: "close", side: null, sizeKind: null, sizeValue: null, stopLossPercent: null, takeProfitRiskReward: null, closeFraction: null },
+    },
+  ]);
+  assert.equal(rules[0].action, "平掉当前仓位的 50%");
+  assert.equal(rules[1].action, "平掉当前仓位");
+
+  const [english] = describeRules(en, [{
+    when: ['position.side == "long"'],
+    decision: { type: "close", side: null, sizeKind: null, sizeValue: null, stopLossPercent: null, takeProfitRiskReward: null, closeFraction: 0.25 },
+  }]);
+  assert.equal(english.action, "close 25% of the open position");
+
+  // A whole-position exit spelled as 1 reads the same as one that omits it.
+  const [spelled] = describeRules(zh, [{
+    when: ['position.side == "long"'],
+    decision: { type: "close", side: null, sizeKind: null, sizeValue: null, stopLossPercent: null, takeProfitRiskReward: null, closeFraction: 1 },
+  }]);
+  assert.equal(spelled.action, "平掉当前仓位");
+});
+
 test("describes every supported sizing kind and tolerates a missing contract", () => {
   const [equityRule] = describeRules(zh, [
     { when: ['position.side == "flat"'], decision: { type: "open", side: "short", sizeKind: "equityPercent", sizeValue: 0.25, stopLossPercent: null, takeProfitRiskReward: null } },

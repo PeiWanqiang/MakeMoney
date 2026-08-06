@@ -1,4 +1,5 @@
 import type { StrategyModelArtifact } from "./types.js";
+import { normalizeCloseFraction } from "../semantics/contract.js";
 import type { ContractDecision, ContractRule, ContractTimeframe, StrategyContract } from "../semantics/contract.js";
 
 export const STRATEGY_OUTPUT_SCHEMA = {
@@ -30,8 +31,9 @@ export const STRATEGY_OUTPUT_SCHEMA = {
                   sizeValue: { type: ["number", "null"] },
                   stopLossPercent: { type: ["number", "null"] },
                   takeProfitRiskReward: { type: ["number", "null"] },
+                  closeFraction: { type: ["number", "null"] },
                 },
-                required: ["type", "side", "sizeKind", "sizeValue", "stopLossPercent", "takeProfitRiskReward"],
+                required: ["type", "side", "sizeKind", "sizeValue", "stopLossPercent", "takeProfitRiskReward", "closeFraction"],
               },
             },
             required: ["when", "decision"],
@@ -128,6 +130,7 @@ export function parseStrategyModelArtifact(text: string): StrategyModelArtifact 
     if (sizeKind !== null && sizeKind !== "riskPercent" && sizeKind !== "fixedNotional") {
       throw new Error(`Contract rule ${index + 1} has an invalid size kind.`);
     }
+    const closeFraction = normalizeCloseFraction(numberOrNull("closeFraction"));
     const parsedDecision: ContractDecision = {
       type,
       side,
@@ -135,12 +138,21 @@ export function parseStrategyModelArtifact(text: string): StrategyModelArtifact 
       sizeValue: numberOrNull("sizeValue"),
       stopLossPercent: numberOrNull("stopLossPercent"),
       takeProfitRiskReward: numberOrNull("takeProfitRiskReward"),
+      closeFraction,
     };
     if (type === "open" && (side === null || sizeKind === null || parsedDecision.sizeValue === null || parsedDecision.stopLossPercent === null)) {
       throw new Error(`Contract rule ${index + 1} has an incomplete open decision.`);
     }
+    if (type === "open" && closeFraction !== null) {
+      throw new Error(`Contract rule ${index + 1} sizes an open decision with a close fraction.`);
+    }
+    // closeFraction is the one close field that carries meaning, so it is
+    // excluded from the all-null check rather than being rejected with the rest.
     if (type === "close" && [side, sizeKind, parsedDecision.sizeValue, parsedDecision.stopLossPercent, parsedDecision.takeProfitRiskReward].some((item) => item !== null)) {
       throw new Error(`Contract rule ${index + 1} has a non-null close decision field.`);
+    }
+    if (closeFraction !== null && (closeFraction <= 0 || closeFraction > 1)) {
+      throw new Error(`Contract rule ${index + 1} has a close fraction outside (0, 1].`);
     }
     return { when: [...candidate.when] as string[], decision: parsedDecision };
   });

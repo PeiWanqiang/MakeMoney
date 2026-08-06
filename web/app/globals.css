@@ -408,14 +408,37 @@ summary:hover { color: var(--text); }
 .card-heading h3 { margin-top: 6px; }
 .card-heading p { color: var(--text-3); font-size: 13px; text-align: right; }
 .chart-shell { position: relative; padding: 0 12px 12px; border-top: 1px solid var(--border); }
-.chart-legend { display: flex; flex-wrap: wrap; gap: 18px; padding: 14px 4px 10px; color: var(--text-3); font-size: 13px; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 18px; padding: 12px 4px 10px; color: var(--text-3); font-size: 13px; }
 .chart-legend span { display: flex; align-items: center; gap: 7px; }
 .chart-legend i { width: 9px; height: 9px; border-radius: 2px; }
-.entry-dot { background: #141926; }
-.win-dot { background: var(--positive); }
-.loss-dot { background: var(--negative); }
-.equity-dot { background: var(--brand); }
-.backtest-chart { min-height: 600px; }
+.chart-legend .exit-dot { background: linear-gradient(90deg, var(--positive) 50%, var(--negative) 50%); border-radius: 50%; }
+.chart-note { padding: 0 4px 6px; color: var(--text-3); font-size: 13px; }
+.backtest-chart { width: 100%; }
+
+/* Replay transport: play/pause, speed and a scrub over every bar in the run. */
+.replay-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding: 14px 4px 12px; }
+.replay-controls { display: flex; align-items: center; gap: 10px; }
+.replay-play { display: inline-flex; align-items: center; gap: 9px; padding: 8px 15px 8px 12px; color: #fff; background: var(--text); border-radius: 999px; font-size: 13px; font-weight: 600; }
+.replay-play b { font-size: 11px; line-height: 1; }
+.replay-play:hover { background: var(--brand); }
+.replay-step { padding: 8px 14px; color: var(--text-2); background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; font-size: 13px; }
+.replay-step:hover { color: var(--text); border-color: var(--border-strong); }
+.replay-speed { display: inline-flex; overflow: hidden; border: 1px solid var(--border); border-radius: 999px; }
+.replay-speed button { padding: 8px 12px; color: var(--text-3); background: var(--surface); font-size: 12px; font-variant-numeric: tabular-nums; }
+.replay-speed button + button { border-left: 1px solid var(--border); }
+.replay-speed button.active { color: #fff; background: var(--brand); }
+.replay-scrub { flex: 1 1 220px; min-width: 160px; height: 4px; padding: 0; accent-color: var(--brand); background: var(--border); border-radius: 999px; appearance: none; cursor: pointer; }
+.replay-scrub::-webkit-slider-thumb { width: 14px; height: 14px; background: var(--brand); border-radius: 50%; appearance: none; }
+.replay-scrub::-moz-range-thumb { width: 14px; height: 14px; background: var(--brand); border: 0; border-radius: 50%; }
+.replay-progress { color: var(--text-3); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.replay-state { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 1px; overflow: hidden; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.replay-state article { display: grid; gap: 4px; padding: 11px 13px; background: var(--surface); }
+.replay-state span { color: var(--text-3); font-size: 12px; }
+.replay-state strong { font-size: 14px; font-variant-numeric: tabular-nums; }
+.replay-state article.position-long strong { color: var(--positive); }
+.replay-state article.position-short strong { color: var(--negative); }
+.replay-state article.positive strong { color: var(--positive); }
+.replay-state article.negative strong { color: var(--negative); }
 .chart-tooltip { position: absolute; z-index: 3; display: grid; gap: 3px; width: 190px; padding: 11px 13px; pointer-events: none; color: var(--text); background: rgba(255, 255, 255, .97); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); box-shadow: var(--shadow-2); font: 500 12px/1.7 var(--font-mono); white-space: pre-line; }
 
 .table-wrap { overflow-x: auto; margin: 0 16px 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
@@ -677,7 +700,9 @@ footer { display: flex; align-items: center; justify-content: space-between; gap
   .metric-grid article { padding: 16px; }
   .card-heading { display: block; padding: 16px; }
   .card-heading p { margin-top: 8px; text-align: left; }
-  .backtest-chart { min-height: 520px; }
+  .replay-bar { gap: 10px; }
+  .replay-progress { order: 3; }
+  .replay-state { grid-template-columns: 1fr 1fr; }
   .next-step { grid-template-columns: 1fr; }
   .next-step a { text-align: center; }
   .optimization-lab { padding: 20px 16px; }

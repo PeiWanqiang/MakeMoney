@@ -271,7 +271,15 @@ function decisionFromReturn(statement: ts.ReturnStatement): ContractDecision | u
   const type = literal(objectProperty(statement.expression, "type"));
   if (type !== "open" && type !== "close") return undefined;
   if (type === "close") {
-    return { type, side: null, sizeKind: null, sizeValue: null, stopLossPercent: null, takeProfitRiskReward: null };
+    return {
+      type,
+      side: null,
+      sizeKind: null,
+      sizeValue: null,
+      stopLossPercent: null,
+      takeProfitRiskReward: null,
+      closeFraction: numberProperty(statement.expression, "fraction"),
+    };
   }
   const size = objectProperty(statement.expression, "size");
   const side = literal(objectProperty(statement.expression, "side"));
@@ -286,6 +294,7 @@ function decisionFromReturn(statement: ts.ReturnStatement): ContractDecision | u
     sizeValue,
     stopLossPercent: numberProperty(statement.expression, "stopLossPercent"),
     takeProfitRiskReward: numberProperty(statement.expression, "takeProfitRiskReward"),
+    closeFraction: null,
   };
 }
 

@@ -59,11 +59,11 @@ function submittedReview(item: InternetIntentCandidate, reviewerId: string, kind
     contract: readyContract("1h", [
       {
         when: ["rsi(14)<30"],
-        decision: { type: "open", side: "long", sizeKind: null, sizeValue: null, stopLossPercent: null, takeProfitRiskReward: null },
+        decision: { type: "open", side: "long", sizeKind: null, sizeValue: null, stopLossPercent: null, takeProfitRiskReward: null, closeFraction: null },
       },
       {
         when: ["rsi(14)>50"],
-        decision: { type: "close", side: "long", sizeKind: null, sizeValue: null, stopLossPercent: null, takeProfitRiskReward: null },
+        decision: { type: "close", side: "long", sizeKind: null, sizeValue: null, stopLossPercent: null, takeProfitRiskReward: null, closeFraction: null },
       },
     ]),
     submittedAt: "2026-07-30T01:00:00.000Z",

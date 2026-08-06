@@ -108,12 +108,16 @@ export class DeepSeekStrategyProgramProvider implements StrategyProgramProvider 
             content: `${buildStrategyProviderInput(request)}\n\nReturn one valid JSON object only.${
               outputAttempt === 0
                 ? ""
-                : ` The previous response was empty or malformed. Parser error: ${lastError?.message ?? "unknown format error"}. Include every required field, including clarificationQuestions, and no surrounding text. For close decisions side, sizeKind, sizeValue, stopLossPercent, and takeProfitRiskReward must all be null.`
+                : ` The previous response was empty or malformed. Parser error: ${lastError?.message ?? "unknown format error"}. Include every required field, including clarificationQuestions, and no surrounding text. For close decisions side, sizeKind, sizeValue, stopLossPercent, and takeProfitRiskReward must all be null; closeFraction is null for a whole-position exit and the closed share for a partial one.`
             }`,
           },
         ],
         response_format: { type: "json_object" },
-        max_tokens: 8_000,
+        // The budget covers the reasoning as well as the answer, and a measured
+        // scale-out strategy already spends 6237 completion tokens of which 5096
+        // are reasoning. 8000 left a run with a longer chain of thought nothing
+        // to answer with, which cost a whole attempt to a "truncated" error.
+        max_tokens: 16_000,
         stream: false,
       });
       accumulatedUsage = addUsage(accumulatedUsage, completionUsage(completion.usage));

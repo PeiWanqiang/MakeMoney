@@ -6,7 +6,7 @@ import { readyContract } from "../src/semantics/contract.js";
 
 const contract = readyContract("1h", [{
   when: ['rsi("close",14,0) < 30'],
-  decision: { type: "open", side: "long", sizeKind: "riskPercent", sizeValue: 0.01, stopLossPercent: 0.05, takeProfitRiskReward: null },
+  decision: { type: "open", side: "long", sizeKind: "riskPercent", sizeValue: 0.01, stopLossPercent: 0.05, takeProfitRiskReward: null, closeFraction: null },
 }]);
 
 function golden(action: InternetIntentGoldenRecord["expectedFirstAction"]): InternetIntentGoldenRecord {
