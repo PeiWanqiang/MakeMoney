@@ -287,7 +287,10 @@ const KLINE_CACHE_VERSION = "klines-v1";
 // Bumped again when the interpreter's RSI adopted the sandbox engine's reading
 // of a flat window (neutral 50 rather than 100): a stored result computed under
 // the old definition must not be replayed under the new one.
-const BACKTEST_CACHE_VERSION = "backtest-v6-rsi-flat-window";
+// Bumped when the result key became bound to the stored program source. Before
+// this, two programs that claimed the same audit contract could reuse one
+// another's cached result even though the service executes source, not contract.
+const BACKTEST_CACHE_VERSION = "backtest-v7-source-bound";
 const SERVICE_ENGINE_VERSION = "cli-sandbox-0.1.0";
 // Bumped when optimization moved to the service: the experiment id derives from
 // this key, and the blind test is one-shot per id, so an old-engine experiment
@@ -1935,6 +1938,7 @@ async function runBacktest(request: Request, env: BacktestEnv, identity: Identit
   const semanticLockHash = await sha256Text(semanticSkeleton(contract));
   const usingService = Boolean(env.BACKTEST_SERVICE_URL);
   const source = typeof strategy.source === "string" ? strategy.source : "";
+  const sourceDigest = await sha256Text(source);
   // The service executes the real program; for that path the program must not
   // depend on data fields the Web kline pipeline cannot feed it. The AST-based
   // verify gate catches these at analyze time; this regex is the legacy-row
@@ -1966,6 +1970,7 @@ async function runBacktest(request: Request, env: BacktestEnv, identity: Identit
   const resultCacheKey = await sha256Text(JSON.stringify({
     version: BACKTEST_CACHE_VERSION,
     engine,
+    sourceDigest,
     contract,
     asset: stored.asset,
     market: stored.market,
@@ -2013,6 +2018,7 @@ async function runBacktest(request: Request, env: BacktestEnv, identity: Identit
     dataSource: fetched.dataSource,
     dataWarnings: fetched.warnings,
     engineVersion: usingService ? SERVICE_ENGINE_VERSION : "proof-worker-0.4.0",
+    sourceDigest,
     executionModel: "closed-bar signal → next-bar open; stop-loss wins same-bar conflicts",
     startedAt: new Date(bars[0]!.timestamp).toISOString(),
     endedAt: new Date(bars.at(-1)!.timestamp + TIMEFRAME_MS[contract.timeframe] - 1).toISOString(),

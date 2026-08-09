@@ -10,9 +10,9 @@ import {
   type MaterializeResponse,
   type OptimizationServiceRequest,
   type OptimizationServiceResponse,
-  type ServiceBacktestConfig,
 } from "../../../src/contracts/index.js";
 import type { StrategyContract } from "../../../src/semantics/contract.js";
+import { parseStrategyContract, StrategyContractValidationError } from "../../../src/semantics/contract.js";
 import { runBlindTest } from "../../../src/optimization/blind-test.js";
 import { runParameterOptimization } from "../../../src/optimization/optimization.js";
 import { applyParametersToSource } from "../../../src/optimization/program-apply.js";
@@ -22,23 +22,25 @@ import {
   type ParameterSelection,
 } from "../../../src/optimization/parameter-discovery.js";
 import { CodedServiceError } from "../lib/errors.js";
-import { isFiniteNumber, serviceBarsToMarketBars } from "../lib/bars.js";
+import { isFiniteNumber, serviceBarsToMarketBars, validateServiceBars, validateServiceConfig } from "../lib/bars.js";
 
 const MAX_OPTIMIZATION_PARAMETERS = 4;
 const MAX_OPTIMIZATION_TRIALS = 16;
 
-function isContract(value: unknown): value is StrategyContract {
-  if (!value || typeof value !== "object") return false;
-  const contract = value as Record<string, unknown>;
-  return typeof contract.timeframe === "string" && Array.isArray(contract.rules);
+function serviceContract(value: unknown): StrategyContract {
+  try {
+    return parseStrategyContract(value);
+  } catch (error) {
+    if (error instanceof StrategyContractValidationError) {
+      throw new CodedServiceError("BAD_REQUEST", error.message, 400);
+    }
+    throw error;
+  }
 }
 
-function validateConfig(config: ServiceBacktestConfig | undefined, label: string): void {
-  if (!config) return;
-  for (const field of ["initialCapital", "takerFeeRate", "slippageBps", "maxLeverage"] as const) {
-    if (config[field] !== undefined && !isFiniteNumber(config[field])) {
-      throw new CodedServiceError("BAD_REQUEST", `${label}.${field} must be a finite number.`, 400);
-    }
+function requireSchemaVersion(actual: unknown, expected: string): void {
+  if (actual !== expected) {
+    throw new CodedServiceError("UNSUPPORTED_SCHEMA_VERSION", `schemaVersion must be '${expected}'.`, 400);
   }
 }
 
@@ -101,11 +103,14 @@ function validateCandidateValues(values: unknown, definitions: ParameterDefiniti
 export function registerOptimizationRoutes(app: FastifyInstance): void {
   app.post<{ Body: OptimizationServiceRequest }>("/v1/optimization/run", async (request, reply) => {
     const body = request.body;
-    if (!body || typeof body.source !== "string" || !isContract(body.contract) || !Array.isArray(body.bars)) {
+    if (!body || typeof body.source !== "string") {
       throw new CodedServiceError("BAD_REQUEST", "Request must include a source, a contract and bars.", 400);
     }
-    validateConfig(body.config, "config");
-    const definitions = extractParameterSchema(body.contract);
+    requireSchemaVersion(body.schemaVersion, OPTIMIZATION_CONTRACT_VERSION);
+    const contract = serviceContract(body.contract);
+    validateServiceConfig(body.config);
+    validateServiceBars(body.bars, "bars", 60);
+    const definitions = extractParameterSchema(contract);
     if (definitions.length === 0) {
       throw new CodedServiceError("NO_TUNABLE_PARAMETERS", "这份策略没有可安全调整的数字参数", 409);
     }
@@ -116,13 +121,10 @@ export function registerOptimizationRoutes(app: FastifyInstance): void {
       throw new CodedServiceError("BAD_REQUEST", `maxTrials 必须为 6～${MAX_OPTIMIZATION_TRIALS}`, 400);
     }
     const bars = serviceBarsToMarketBars(body.bars);
-    if (bars.length < 60) {
-      throw new CodedServiceError("BAD_REQUEST", "优化至少需要 60 根完整K线，以便隔离训练、滚动验证和盲测区间", 400);
-    }
     const started = Date.now();
     const result = await runParameterOptimization({
       source: body.source,
-      contract: body.contract,
+      contract,
       selections,
       objective,
       maximumTrials,
@@ -140,20 +142,23 @@ export function registerOptimizationRoutes(app: FastifyInstance): void {
 
   app.post<{ Body: BlindServiceRequest }>("/v1/optimization/blind", async (request, reply) => {
     const body = request.body;
-    if (!body || typeof body.source !== "string" || !isContract(body.contract) || !Array.isArray(body.bars)) {
+    if (!body || typeof body.source !== "string") {
       throw new CodedServiceError("BAD_REQUEST", "Request must include a source, a contract and bars.", 400);
     }
+    requireSchemaVersion(body.schemaVersion, BLIND_CONTRACT_VERSION);
+    const contract = serviceContract(body.contract);
     if (!isFiniteNumber(body.blindStartTime)) {
       throw new CodedServiceError("BAD_REQUEST", "blindStartTime must be a finite timestamp.", 400);
     }
-    validateConfig(body.config, "config");
-    const definitions = extractParameterSchema(body.contract);
+    validateServiceConfig(body.config);
+    validateServiceBars(body.bars);
+    const definitions = extractParameterSchema(contract);
     const candidateParameters = validateCandidateValues(body.candidateParameters, definitions);
     const bars = serviceBarsToMarketBars(body.bars);
     const started = Date.now();
     const outcome = await runBlindTest({
       source: body.source,
-      contract: body.contract,
+      contract,
       definitions,
       candidateParameters,
       bars,
@@ -171,12 +176,14 @@ export function registerOptimizationRoutes(app: FastifyInstance): void {
 
   app.post<{ Body: MaterializeRequest }>("/v1/optimization/materialize", async (request, reply) => {
     const body = request.body;
-    if (!body || typeof body.source !== "string" || !isContract(body.contract)) {
+    if (!body || typeof body.source !== "string") {
       throw new CodedServiceError("BAD_REQUEST", "Request must include a source and a contract.", 400);
     }
-    const definitions = extractParameterSchema(body.contract);
+    requireSchemaVersion(body.schemaVersion, MATERIALIZE_CONTRACT_VERSION);
+    const contract = serviceContract(body.contract);
+    const definitions = extractParameterSchema(contract);
     const parameters = validateCandidateValues(body.parameters, definitions);
-    const source = applyParametersToSource(body.source, body.contract, definitions, parameters);
+    const source = applyParametersToSource(body.source, contract, definitions, parameters);
     const response: MaterializeResponse = {
       schemaVersion: MATERIALIZE_CONTRACT_VERSION,
       source,

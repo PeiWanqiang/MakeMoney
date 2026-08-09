@@ -1,45 +1,47 @@
-import { createHash } from "node:crypto";
-
 import type { FastifyInstance } from "fastify";
 
-import { StrategyCompilationError } from "../../../src/compiler/compile-strategy-source.js";
+import { compileStrategySource, StrategyCompilationError } from "../../../src/compiler/compile-strategy-source.js";
 import {
   BACKTEST_CONTRACT_VERSION,
   type BacktestServiceRequest,
   type BacktestServiceResponse,
   type ServiceTimeframeContext,
 } from "../../../src/contracts/index.js";
-import { runBacktest, type BacktestTimeframeContext } from "../../../src/runtime/backtest.js";
+import { isTimeframe } from "../../../src/core/timeframes.js";
+import { runCompiledBacktest, type BacktestTimeframeContext } from "../../../src/runtime/backtest.js";
 import { calculateBacktestMetrics } from "../../../src/runtime/backtest-metrics.js";
 import { CodedServiceError } from "../lib/errors.js";
-import { isFiniteNumber, serviceBarsToMarketBars } from "../lib/bars.js";
+import { serviceBarsToMarketBars, validateServiceBars, validateServiceConfig } from "../lib/bars.js";
 
 function validateRequest(body: BacktestServiceRequest): void {
-  if (!body || typeof body.source !== "string" || !Array.isArray(body.bars)) {
+  if (!body || typeof body !== "object" || typeof body.source !== "string") {
     throw new CodedServiceError("BAD_REQUEST", "Request must include a strategy source and a bars array.", 400);
   }
-  if (body.bars.length < 2) {
-    throw new CodedServiceError("BAD_REQUEST", "Backtest requires at least two market bars.", 400);
+  if (body.schemaVersion !== BACKTEST_CONTRACT_VERSION) {
+    throw new CodedServiceError(
+      "UNSUPPORTED_SCHEMA_VERSION",
+      `schemaVersion must be '${BACKTEST_CONTRACT_VERSION}'.`,
+      400,
+    );
   }
-  const config = body.config ?? {};
-  for (const field of ["initialCapital", "takerFeeRate", "slippageBps", "maxLeverage"] as const) {
-    if (config[field] !== undefined && !isFiniteNumber(config[field])) {
-      throw new CodedServiceError("BAD_REQUEST", `config.${field} must be a finite number.`, 400);
-    }
-  }
-  for (const [index, bar] of body.bars.entries()) {
-    if (!bar || !isFiniteNumber(bar.timestamp) || !isFiniteNumber(bar.open) || !isFiniteNumber(bar.high)
-      || !isFiniteNumber(bar.low) || !isFiniteNumber(bar.close) || !isFiniteNumber(bar.volume)) {
-      throw new CodedServiceError("BAD_REQUEST", `bars[${index}] is missing a required OHLCV field.`, 400);
-    }
-  }
+  validateServiceBars(body.bars);
+  validateServiceConfig(body.config);
 }
 
 function mapTimeframeContext(context: ServiceTimeframeContext | undefined): BacktestTimeframeContext | undefined {
   if (!context) return undefined;
+  if (!isTimeframe(context.primaryTimeframe) || !context.bars || typeof context.bars !== "object" || Array.isArray(context.bars)) {
+    throw new CodedServiceError("BAD_REQUEST", "timeframeContext must include a valid primaryTimeframe and bars map.", 400);
+  }
   const bars: BacktestTimeframeContext["bars"] = {};
   for (const [interval, rows] of Object.entries(context.bars)) {
-    if (rows) bars[interval as keyof typeof bars] = serviceBarsToMarketBars(rows);
+    if (!isTimeframe(interval)) {
+      throw new CodedServiceError("BAD_REQUEST", `timeframeContext contains unsupported interval '${interval}'.`, 400);
+    }
+    if (rows) {
+      validateServiceBars(rows, `timeframeContext.bars.${interval}`, 1);
+      bars[interval as keyof typeof bars] = serviceBarsToMarketBars(rows);
+    }
   }
   return { primaryTimeframe: context.primaryTimeframe, bars };
 }
@@ -48,12 +50,19 @@ export function registerBacktestRoutes(app: FastifyInstance): void {
   app.post<{ Body: BacktestServiceRequest }>("/v1/backtest", async (request, reply) => {
     const body = request.body;
     validateRequest(body);
-    const sourceHash = body.sourceHash ?? createHash("sha256").update(body.source).digest("hex");
     try {
       const started = Date.now();
+      const program = compileStrategySource(body.source);
+      if (body.sourceHash !== undefined && body.sourceHash !== program.sourceHash) {
+        throw new CodedServiceError(
+          "SOURCE_HASH_MISMATCH",
+          "sourceHash does not match the compiled strategy program.",
+          409,
+        );
+      }
       const bars = serviceBarsToMarketBars(body.bars);
-      const result = await runBacktest(
-        body.source,
+      const result = await runCompiledBacktest(
+        program,
         bars,
         body.config,
         mapTimeframeContext(body.timeframeContext),
@@ -61,7 +70,7 @@ export function registerBacktestRoutes(app: FastifyInstance): void {
       const executionMs = Date.now() - started;
       const response: BacktestServiceResponse = {
         schemaVersion: BACKTEST_CONTRACT_VERSION,
-        sourceHash,
+        sourceHash: program.sourceHash,
         strategy: result.strategy,
         config: result.config,
         initialCapital: result.initialCapital,

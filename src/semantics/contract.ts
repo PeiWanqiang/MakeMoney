@@ -1,4 +1,4 @@
-import { TIMEFRAME_PATTERN, type Timeframe } from "../core/timeframes.js";
+import { isTimeframe, TIMEFRAME_PATTERN, type Timeframe } from "../core/timeframes.js";
 import { normalizeExpressionText } from "./expression.js";
 
 export type ContractTimeframe = Timeframe;
@@ -56,6 +56,133 @@ export interface StrategyContract {
   timeframe: ContractTimeframe;
   rules: ContractRule[];
   unsupportedCapabilities: string[];
+}
+
+/** Stable runtime rejection raised when a wire/model contract is malformed. */
+export class StrategyContractValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StrategyContractValidationError";
+  }
+}
+
+function contractError(message: string): never {
+  throw new StrategyContractValidationError(message);
+}
+
+function finiteNumberOrNull(value: unknown, field: string): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) contractError(`${field} must be a finite number or null.`);
+  return value;
+}
+
+function contractValue(value: unknown, field: string): ContractValue {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) contractError(`${field} must be finite.`);
+    return value;
+  }
+  if (typeof value !== "string" || value.trim().length === 0) {
+    contractError(`${field} must be a finite number, a non-empty expression, or null.`);
+  }
+  return value.trim();
+}
+
+function parseContractDecision(value: unknown, ruleIndex: number): ContractDecision {
+  const label = `contract.rules[${ruleIndex}].decision`;
+  if (!value || typeof value !== "object" || Array.isArray(value)) contractError(`${label} must be an object.`);
+  const decision = value as Record<string, unknown>;
+  if (decision.type !== "open" && decision.type !== "close") contractError(`${label}.type is invalid.`);
+
+  const closeFraction = normalizeCloseFraction(finiteNumberOrNull(decision.closeFraction, `${label}.closeFraction`));
+  if (closeFraction !== null && (closeFraction <= 0 || closeFraction > 1)) {
+    contractError(`${label}.closeFraction must be greater than zero and at most one.`);
+  }
+
+  if (decision.type === "close") {
+    for (const field of ["side", "sizeKind", "sizeValue", "stopLossPercent", "takeProfitRiskReward"] as const) {
+      if (decision[field] !== undefined && decision[field] !== null) contractError(`${label}.${field} must be null for a close decision.`);
+    }
+    return {
+      type: "close",
+      side: null,
+      sizeKind: null,
+      sizeValue: null,
+      stopLossPercent: null,
+      takeProfitRiskReward: null,
+      closeFraction,
+    };
+  }
+
+  if (closeFraction !== null) contractError(`${label}.closeFraction must be null for an open decision.`);
+  if (decision.side !== "long" && decision.side !== "short") contractError(`${label}.side is invalid.`);
+  if (decision.sizeKind !== "riskPercent" && decision.sizeKind !== "equityPercent" && decision.sizeKind !== "fixedNotional") {
+    contractError(`${label}.sizeKind is invalid.`);
+  }
+  const sizeValue = finiteNumberOrNull(decision.sizeValue, `${label}.sizeValue`);
+  if (sizeValue === null || sizeValue <= 0) contractError(`${label}.sizeValue must be greater than zero.`);
+  if (decision.sizeKind !== "fixedNotional" && sizeValue > 1) {
+    contractError(`${label}.sizeValue must be at most one for percentage sizing.`);
+  }
+  const stopLossPercent = contractValue(decision.stopLossPercent, `${label}.stopLossPercent`);
+  if (stopLossPercent === null) contractError(`${label}.stopLossPercent is required for an open decision.`);
+  if (typeof stopLossPercent === "number" && (stopLossPercent <= 0 || stopLossPercent >= 1)) {
+    contractError(`${label}.stopLossPercent must be between zero and one.`);
+  }
+  const takeProfitRiskReward = contractValue(decision.takeProfitRiskReward, `${label}.takeProfitRiskReward`);
+  if (typeof takeProfitRiskReward === "number" && takeProfitRiskReward <= 0) {
+    contractError(`${label}.takeProfitRiskReward must be greater than zero.`);
+  }
+  return {
+    type: "open",
+    side: decision.side,
+    sizeKind: decision.sizeKind,
+    sizeValue,
+    stopLossPercent,
+    takeProfitRiskReward,
+    closeFraction: null,
+  };
+}
+
+/**
+ * Parses the one v1 contract boundary shared by model output and service APIs.
+ *
+ * Older stored contracts may omit fields whose historical meaning was null, so
+ * the parser fills those nulls deterministically. It never repairs a malformed
+ * trading value or invents a missing open-decision field.
+ */
+export function parseStrategyContract(value: unknown): StrategyContract {
+  if (!value || typeof value !== "object" || Array.isArray(value)) contractError("contract must be an object.");
+  const contract = value as Record<string, unknown>;
+  if (contract.schemaVersion !== "1.0") contractError("contract.schemaVersion must be '1.0'.");
+  if (!isTimeframe(contract.timeframe)) contractError("contract.timeframe is invalid.");
+  if (!Array.isArray(contract.rules)) contractError("contract.rules must be an array.");
+  if (!Array.isArray(contract.unsupportedCapabilities)
+    || !contract.unsupportedCapabilities.every((item) => typeof item === "string" && item.trim().length > 0)) {
+    contractError("contract.unsupportedCapabilities must be an array of non-empty strings.");
+  }
+
+  const rules = contract.rules.map((valueRule, ruleIndex): ContractRule => {
+    if (!valueRule || typeof valueRule !== "object" || Array.isArray(valueRule)) {
+      return contractError(`contract.rules[${ruleIndex}] must be an object.`);
+    }
+    const rule = valueRule as Record<string, unknown>;
+    if (!Array.isArray(rule.when) || rule.when.length === 0
+      || !rule.when.every((condition) => typeof condition === "string" && condition.trim().length > 0)) {
+      return contractError(`contract.rules[${ruleIndex}].when must contain non-empty conditions.`);
+    }
+    return {
+      when: rule.when.map((condition) => (condition as string).trim()),
+      decision: parseContractDecision(rule.decision, ruleIndex),
+    };
+  });
+
+  return {
+    schemaVersion: "1.0",
+    timeframe: contract.timeframe,
+    rules,
+    unsupportedCapabilities: contract.unsupportedCapabilities.map((item) => (item as string).trim()),
+  };
 }
 
 export interface SemanticDiagnostic {

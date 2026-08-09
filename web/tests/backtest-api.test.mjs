@@ -140,6 +140,56 @@ test("runs a confirmed contract against fetched klines and persists the receipt"
   }
 });
 
+test("binds persistent backtest results to the exact strategy source", async () => {
+  const originalFetch = globalThis.fetch;
+  const CACHE = new Bucket();
+  const local = gzipSync(strToU8(JSON.stringify(bars)));
+  const ASSETS = { async fetch() { return new Response(local); } };
+  let serviceCalls = 0;
+  globalThis.fetch = async (request) => {
+    const url = typeof request === "string" ? request : request.url;
+    if (url !== "http://backtest.test/v1/backtest") throw new Error(`unexpected external fetch: ${url}`);
+    serviceCalls += 1;
+    const finalEquity = 10_000 + serviceCalls;
+    return Response.json({
+      schemaVersion: "backtest-1.0",
+      finalEquity,
+      metrics: {
+        netReturn: serviceCalls / 10_000,
+        maximumDrawdown: 0,
+        sharpe: null,
+        winRate: null,
+        profitFactor: 0,
+        tradeCount: 0,
+        winningTrades: 0,
+        losingTrades: 0,
+        fees: 0,
+        slippageCost: 0,
+        fundingPnl: 0,
+      },
+      trades: [],
+      equityCurve: bars.map((row) => ({ timestamp: row[0], equity: finalEquity })),
+    });
+  };
+  try {
+    const strategyA = { ...storedStrategy, source: "defineStrategy({ name: 'variant-a' })" };
+    const strategyB = { ...storedStrategy, source: "defineStrategy({ name: 'variant-b' })" };
+    const env = { ASSETS, CACHE, BACKTEST_SERVICE_URL: "http://backtest.test" };
+    const first = await run("Binance Spot", [], env, {}, strategyA);
+    const second = await run("Binance Spot", [], env, {}, strategyB);
+    assert.equal(first.response.status, 200, JSON.stringify(first.result));
+    assert.equal(second.response.status, 200, JSON.stringify(second.result));
+    assert.equal(serviceCalls, 2);
+    assert.notEqual(first.result.sourceDigest, second.result.sourceDigest);
+    assert.equal(first.result.performance.resultCache, "miss");
+    assert.equal(second.result.performance.resultCache, "miss");
+    assert.equal(first.result.finalEquity, 10_001);
+    assert.equal(second.result.finalEquity, 10_002);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("executes a percentage pullback with account-equity notional sizing", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => { throw new Error("external fetch must not run on a local-data hit"); };

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { emaFundingStrategy, emaTrendStrategy } from "../examples/strategies.js";
 import { buildServer } from "../services/backtest/app.js";
+import { compileStrategySource } from "../src/compiler/compile-strategy-source.js";
 import type { ServiceBar } from "../src/contracts/index.js";
 
 const H = 3_600_000;
@@ -79,7 +80,7 @@ describe("backtest service", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.schemaVersion).toBe("backtest-1.0");
-    expect(body.sourceHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(body.sourceHash).toBe(compileStrategySource(emaTrendStrategy).sourceHash);
     expect(body.strategy.programHash).toMatch(/^[0-9a-f]{64}$/);
     expect(body.initialCapital).toBe(10_000);
     expect(body.metrics.tradeCount).toBe(1);
@@ -152,6 +153,63 @@ describe("backtest service", () => {
     await app.close();
   });
 
+  it("POST /v1/backtest rejects stale wire versions and caller-supplied hash mismatches", async () => {
+    const app = buildServer();
+    const payload = {
+      source: FUNDING_SOURCE,
+      bars: bars([100, 101, 102], -0.0001),
+      config: { initialCapital: 10_000, takerFeeRate: 0.00045, slippageBps: 2, maxLeverage: 3 },
+    };
+    const stale = await app.inject({
+      method: "POST",
+      url: "/v1/backtest",
+      payload: { ...payload, schemaVersion: "backtest-0.9" },
+    });
+    expect(stale.statusCode).toBe(400);
+    expect(stale.json()).toMatchObject({ code: "UNSUPPORTED_SCHEMA_VERSION" });
+
+    const mismatch = await app.inject({
+      method: "POST",
+      url: "/v1/backtest",
+      payload: { ...payload, schemaVersion: "backtest-1.0", sourceHash: "0".repeat(64) },
+    });
+    expect(mismatch.statusCode).toBe(409);
+    expect(mismatch.json()).toMatchObject({ code: "SOURCE_HASH_MISMATCH" });
+    await app.close();
+  });
+
+  it("POST /v1/backtest rejects unordered bars and impossible OHLC bounds", async () => {
+    const app = buildServer();
+    const base = bars([100, 101, 102], -0.0001);
+    const unordered = await app.inject({
+      method: "POST",
+      url: "/v1/backtest",
+      payload: {
+        schemaVersion: "backtest-1.0",
+        source: FUNDING_SOURCE,
+        bars: [base[1]!, base[0]!, base[2]!],
+        config: { initialCapital: 10_000, takerFeeRate: 0, slippageBps: 0, maxLeverage: 1 },
+      },
+    });
+    expect(unordered.statusCode).toBe(400);
+    expect(unordered.json()).toMatchObject({ code: "BAD_REQUEST" });
+
+    const impossible = base.map((bar, index) => index === 1 ? { ...bar, high: bar.close - 1 } : bar);
+    const invalidOhlc = await app.inject({
+      method: "POST",
+      url: "/v1/backtest",
+      payload: {
+        schemaVersion: "backtest-1.0",
+        source: FUNDING_SOURCE,
+        bars: impossible,
+        config: { initialCapital: 10_000, takerFeeRate: 0, slippageBps: 0, maxLeverage: 1 },
+      },
+    });
+    expect(invalidOhlc.statusCode).toBe(400);
+    expect(invalidOhlc.json()).toMatchObject({ code: "BAD_REQUEST" });
+    await app.close();
+  });
+
   it("POST /v1/strategy/verify passes a program/contract pair that match", async () => {
     const app = buildServer();
     const response = await app.inject({
@@ -191,6 +249,18 @@ describe("backtest service", () => {
     expect(body.ok).toBe(false);
     expect(body.capabilities.unsupported).toContain("fundingRate");
     expect(body.diagnostics.some((item: { code: string }) => item.code === "UNSUPPORTED_CAPABILITY")).toBe(true);
+    await app.close();
+  });
+
+  it("POST /v1/strategy/verify rejects an invalid wire version before semantic work", async () => {
+    const app = buildServer();
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/strategy/verify",
+      payload: { schemaVersion: "verify-0.9", source: FUNDING_SOURCE, contract: FUNDING_CONTRACT },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: "UNSUPPORTED_SCHEMA_VERSION" });
     await app.close();
   });
 

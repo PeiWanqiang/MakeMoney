@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseStrategyModelArtifact } from "../src/studio/strategy-artifact.js";
+import { parseStrategyModelArtifact, STRATEGY_OUTPUT_SCHEMA } from "../src/studio/strategy-artifact.js";
 
 function artifact(overrides: Record<string, unknown>): string {
   return JSON.stringify({
@@ -38,5 +38,69 @@ describe("strategy model artifact triage", () => {
     expect(() => parseStrategyModelArtifact(artifact({
       contract: { schemaVersion: "1.0", timeframe: "1h", rules: [], unsupportedCapabilities: ["unknown timeframe"] },
     }))).toThrow(/cannot contain unsupported capabilities/);
+  });
+
+  it("accepts equity-notional sizing and computed risk fields through the model boundary", () => {
+    const parsed = parseStrategyModelArtifact(artifact({
+      status: "ready",
+      source: "defineStrategy({ id: 'fixture', name: 'fixture', version: 1, onBar() { return { type: 'hold' } } })",
+      clarificationQuestions: [],
+      contract: {
+        schemaVersion: "1.0",
+        timeframe: "15m",
+        unsupportedCapabilities: [],
+        rules: [{
+          when: ['position.side == "flat"', 'market.close > ema("close",30,0)'],
+          decision: {
+            type: "open",
+            side: "short",
+            sizeKind: "equityPercent",
+            sizeValue: 0.35,
+            stopLossPercent: "atr(21,0)/market.close*1.5",
+            takeProfitRiskReward: "2+0.5",
+            closeFraction: null,
+          },
+        }],
+      },
+    }));
+
+    expect(parsed.contract.rules[0]?.decision).toMatchObject({
+      side: "short",
+      sizeKind: "equityPercent",
+      sizeValue: 0.35,
+      stopLossPercent: "atr(21,0)/market.close*1.5",
+      takeProfitRiskReward: "2+0.5",
+    });
+  });
+
+  it("keeps the strict OpenAI schema aligned with every supported sizing and risk representation", () => {
+    const rules = STRATEGY_OUTPUT_SCHEMA.properties.contract.properties.rules;
+    const decision = rules.items.properties.decision.properties;
+    expect(decision.sizeKind.enum).toEqual(["riskPercent", "equityPercent", "fixedNotional", null]);
+    expect(decision.stopLossPercent.type).toContain("string");
+    expect(decision.takeProfitRiskReward.type).toContain("string");
+  });
+
+  it("rejects empty computed risk fields and out-of-range percentage sizing", () => {
+    const readyContract = (decision: Record<string, unknown>) => artifact({
+      status: "ready",
+      source: "defineStrategy({ id: 'fixture', name: 'fixture', version: 1, onBar() { return { type: 'hold' } } })",
+      clarificationQuestions: [],
+      contract: {
+        schemaVersion: "1.0",
+        timeframe: "1h",
+        unsupportedCapabilities: [],
+        rules: [{ when: ['position.side == "flat"'], decision }],
+      },
+    });
+    const baseDecision = {
+      type: "open", side: "long", sizeKind: "riskPercent", sizeValue: 0.01,
+      stopLossPercent: 0.05, takeProfitRiskReward: null, closeFraction: null,
+    };
+
+    expect(() => parseStrategyModelArtifact(readyContract({ ...baseDecision, stopLossPercent: "   " })))
+      .toThrow(/non-empty expression/);
+    expect(() => parseStrategyModelArtifact(readyContract({ ...baseDecision, sizeKind: "equityPercent", sizeValue: 1.01 })))
+      .toThrow(/at most one/);
   });
 });

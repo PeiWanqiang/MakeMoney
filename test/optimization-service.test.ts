@@ -77,6 +77,46 @@ describe("optimization service endpoints", () => {
     await app.close();
   });
 
+  it("POST /v1/optimization/run rejects a stale wire contract before executing", async () => {
+    const app = buildServer();
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/optimization/run",
+      payload: {
+        schemaVersion: "optimization-0.9",
+        source: emaTrendStrategy,
+        contract: contract(),
+        selections: [{ id: fastPeriodId(), min: 10, max: 30, steps: 3 }],
+        objective: "balanced",
+        maximumTrials: 6,
+        bars: bars(70),
+        config: CONFIG,
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: "UNSUPPORTED_SCHEMA_VERSION" });
+    await app.close();
+  });
+
+  it("POST /v1/optimization/materialize rejects a contract outside the shared capability boundary", async () => {
+    const app = buildServer();
+    const invalidContract = structuredClone(contract());
+    (invalidContract.rules[0]!.decision as unknown as Record<string, unknown>).sizeKind = "portfolioRiskBudget";
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/optimization/materialize",
+      payload: {
+        schemaVersion: "materialize-1.0",
+        source: emaTrendStrategy,
+        contract: invalidContract,
+        parameters: { [fastPeriodId()]: 30 },
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: "BAD_REQUEST" });
+    await app.close();
+  });
+
   it("POST /v1/optimization/materialize rewrites the real program", async () => {
     const app = buildServer();
     const response = await app.inject({

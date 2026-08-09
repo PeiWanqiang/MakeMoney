@@ -45,7 +45,11 @@ export interface BacktestServiceRequest {
   schemaVersion: typeof BACKTEST_CONTRACT_VERSION;
   /** The exact `defineStrategy({...})` TypeScript source; the only execution truth. */
   source: string;
-  /** Optional digest so the service can bind results to an input fingerprint. */
+  /**
+   * Optional compiled-program hash asserted by a trusted caller. The service
+   * always compiles the source itself, rejects a mismatch, and returns its own
+   * computed value; callers must not send a raw-source digest in this field.
+   */
   sourceHash?: string;
   bars: ServiceBar[];
   config: ServiceBacktestConfig;

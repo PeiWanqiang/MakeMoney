@@ -8,16 +8,10 @@ import {
   type VerifyServiceRequest,
   type VerifyServiceResponse,
 } from "../../../src/contracts/index.js";
-import type { StrategyContract } from "../../../src/semantics/contract.js";
 import { usedCapabilities, type StrategyCapability } from "../../../src/semantics/capabilities.js";
+import { parseStrategyContract, StrategyContractValidationError } from "../../../src/semantics/contract.js";
 import { verifyStrategySemantics } from "../../../src/semantics/verify-semantics.js";
 import { CodedServiceError } from "../lib/errors.js";
-
-function isContract(value: unknown): value is StrategyContract {
-  if (!value || typeof value !== "object") return false;
-  const contract = value as Record<string, unknown>;
-  return typeof contract.timeframe === "string" && Array.isArray(contract.rules);
-}
 
 function isCapability(value: unknown): value is StrategyCapability {
   return typeof value === "string" && [
@@ -39,8 +33,24 @@ function compileSource(source: string): VerifyCompileResult {
 export function registerVerifyRoutes(app: FastifyInstance): void {
   app.post<{ Body: VerifyServiceRequest }>("/v1/strategy/verify", async (request, reply) => {
     const body = request.body;
-    if (!body || typeof body.source !== "string" || !isContract(body.contract)) {
+    if (!body || typeof body.source !== "string") {
       throw new CodedServiceError("BAD_REQUEST", "Request must include a strategy source and a contract.", 400);
+    }
+    if (body.schemaVersion !== VERIFY_CONTRACT_VERSION) {
+      throw new CodedServiceError(
+        "UNSUPPORTED_SCHEMA_VERSION",
+        `schemaVersion must be '${VERIFY_CONTRACT_VERSION}'.`,
+        400,
+      );
+    }
+    let contract: ReturnType<typeof parseStrategyContract>;
+    try {
+      contract = parseStrategyContract(body.contract);
+    } catch (error) {
+      if (error instanceof StrategyContractValidationError) {
+        throw new CodedServiceError("BAD_REQUEST", error.message, 400);
+      }
+      throw error;
     }
     const available = Array.isArray(body.availableCapabilities) && body.availableCapabilities.every(isCapability)
       ? body.availableCapabilities
@@ -48,7 +58,7 @@ export function registerVerifyRoutes(app: FastifyInstance): void {
     const availableSet = new Set<StrategyCapability>(available);
 
     const compiled = compileSource(body.source);
-    const report = compiled.ok ? await verifyStrategySemantics(body.source, body.contract) : null;
+    const report = compiled.ok ? await verifyStrategySemantics(body.source, contract) : null;
     const used = compiled.ok ? [...usedCapabilities(body.source)].sort() : [];
     const unsupported = used.filter((capability) => !availableSet.has(capability));
 
