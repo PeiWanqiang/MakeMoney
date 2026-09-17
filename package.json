@@ -2,6 +2,7 @@
   "name": "crypto-strategy-studio",
   "version": "0.0.1",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "backtest:real": "tsx examples/run-real-data.ts",
