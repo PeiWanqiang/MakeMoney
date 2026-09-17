@@ -34,7 +34,7 @@
     "eslint": "9.39.4",
     "eslint-config-next": "^16.2.12",
     "postcss": "^8.5.18",
-    "react-server-dom-webpack": "19.2.6",
+    "react-server-dom-webpack": "19.3.0",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
     "undici": "^7.24.8",
