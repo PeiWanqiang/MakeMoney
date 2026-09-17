@@ -28,7 +28,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@typescript-eslint/typescript-estree": "8.65.0",
+    "@typescript-eslint/typescript-estree": "8.70.0",
     "fastify": "^5.11.2",
     "hyparquet": "1.26.2",
     "hyparquet-writer": "0.16.1",
