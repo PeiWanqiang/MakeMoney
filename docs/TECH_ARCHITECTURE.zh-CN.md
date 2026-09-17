@@ -1,7 +1,7 @@
 # 技术架构：Crypto Strategy Studio
 
 状态：Draft v0.1  
-对应产品规格：[PRODUCT_SPEC.md](PRODUCT_SPEC.md)
+对应产品规格：[PRODUCT_SPEC.md](PRODUCT_SPEC.zh-CN.md)
 
 ## 1. 架构目标
 
@@ -155,7 +155,7 @@ LLM Gateway 没有市场交易凭据，也不能访问 Execution Service。
 - L2 book snapshot/updates，为 P1 滑点模型预留。
 - Liquidation events，为 P1 分析预留。
 
-历史回测的已实现底座见[历史行情数据管线](DATA_PIPELINE.md)：原始粒度统一为 1m，按月保存不可变 Parquet 与 SHA-256 manifest；Kraken `XBTUSD` 作为十年单一市场现货基准，Binance Vision `BTCUSDT` 用于快速批量验证，Hyperliquid API 用于近期永续数据。不同 venue/instrument 的序列不得静默拼接。
+历史回测的已实现底座见[历史行情数据管线](DATA_PIPELINE.zh-CN.md)：原始粒度统一为 1m，按月保存不可变 Parquet 与 SHA-256 manifest；Kraken `XBTUSD` 作为十年单一市场现货基准，Binance Vision `BTCUSDT` 用于快速批量验证，Hyperliquid API 用于近期永续数据。不同 venue/instrument 的序列不得静默拼接。
 
 ### 4.6 Backtest Service
 
@@ -242,7 +242,7 @@ Execution Service 不解析策略，也不调用 LLM。
 
 ## 5. 策略程序与内部 IR
 
-用户意图的主要承载物已经改为策略程序。完整程序模型和当前实现见[策略程序设计](STRATEGY_PROGRAM.md)。本节保留的 DSL 用作可选内部 IR、规则摘要、静态能力和审计表达，完整细节见[内部 DSL/IR 设计](STRATEGY_DSL.md)。
+用户意图的主要承载物已经改为策略程序。完整程序模型和当前实现见[策略程序设计](STRATEGY_PROGRAM.zh-CN.md)。本节保留的 DSL 用作可选内部 IR、规则摘要、静态能力和审计表达，完整细节见[内部 DSL/IR 设计](STRATEGY_DSL.zh-CN.md)。
 
 ### 5.1 设计原则
 
@@ -587,7 +587,7 @@ Kill Switch 不能依赖 LLM 或普通前端可用性。
 
 ## 11. 一致性与正确性测试
 
-所有能力变更均受[泛化优先准入规范](GENERALIZATION_POLICY.md)约束。架构评审必须先确认可复用语义原语，再检查其在契约、验证器、运行时和产品层的端到端一致性；单一样例或单次模型输出通过不构成完成证据。
+所有能力变更均受[泛化优先准入规范](GENERALIZATION_POLICY.zh-CN.md)约束。架构评审必须先确认可复用语义原语，再检查其在契约、验证器、运行时和产品层的端到端一致性；单一样例或单次模型输出通过不构成完成证据。
 
 ### 11.1 黄金策略测试集
 

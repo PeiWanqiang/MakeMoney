@@ -75,7 +75,7 @@ Turn any crypto trading idea into a strategy you can verify, simulate, and run.
 
 ## 3. 核心产品循环
 
-产品能力扩展遵循[泛化优先准入规范](GENERALIZATION_POLICY.md)：用户样例用于发现通用语义缺口和建立回归证据，不作为特殊实现分支。只有意图、契约、执行和用户解释一致，并通过变体与边界测试，产品才能展示“已支持”。
+产品能力扩展遵循[泛化优先准入规范](GENERALIZATION_POLICY.zh-CN.md)：用户样例用于发现通用语义缺口和建立回归证据，不作为特殊实现分支。只有意图、契约、执行和用户解释一致，并通过变体与边界测试，产品才能展示“已支持”。
 
 ```text
 描述想法
@@ -155,7 +155,7 @@ Draft
 - 出场：反向条件、止损、止盈、追踪止损、最长持仓时间。
 - 仓位：固定名义金额、账户百分比、按止损距离计算风险。
 
-自定义策略不依赖无限增加模板。AI 直接生成受约束的 TypeScript 策略程序；平台通过 Strategy SDK、AST 安全检查、QuickJS/WASM 沙箱、版本哈希和统一 Runtime 保持可控。DSL 仅作为可选内部 IR，不再承担所有用户表达。完整设计见[策略程序设计](STRATEGY_PROGRAM.md)。
+自定义策略不依赖无限增加模板。AI 直接生成受约束的 TypeScript 策略程序；平台通过 Strategy SDK、AST 安全检查、QuickJS/WASM 沙箱、版本哈希和统一 Runtime 保持可控。DSL 仅作为可选内部 IR，不再承担所有用户表达。完整设计见[策略程序设计](STRATEGY_PROGRAM.zh-CN.md)。
 
 ### 5.3 策略编辑器
 
@@ -459,7 +459,7 @@ P1 实盘可以叠加用户明确授权的 Builder Fee。收费必须在授权�
 
 ## 12. 商务依赖
 
-产品范围、地区开放、计费和创作者功能必须与[商务与市场方案](BUSINESS_PLAN.md)同步评审。以下功能不得仅由产品或技术团队决定上线：
+产品范围、地区开放、计费和创作者功能必须与[商务与市场方案](BUSINESS_PLAN.zh-CN.md)同步评审。以下功能不得仅由产品或技术团队决定上线：
 
 - 实盘自动执行。
 - Builder Fee、推荐返佣和利润分成。

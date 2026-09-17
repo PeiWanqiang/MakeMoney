@@ -8,16 +8,16 @@
 
 ## 核心文档
 
-- [产品规格](docs/PRODUCT_SPEC.md)
-- [策略程序设计](docs/STRATEGY_PROGRAM.md)
-- [内部 DSL/IR 设计](docs/STRATEGY_DSL.md)
-- [技术架构](docs/TECH_ARCHITECTURE.md)
-- [商务与市场方案](docs/BUSINESS_PLAN.md)
-- [历史行情数据管线](docs/DATA_PIPELINE.md)
-- [当前项目状态与后续工作](docs/PROJECT_STATUS.md)
-- [互联网策略意图语料库](docs/INTERNET_INTENT_CORPUS.md)
-- [回测引擎独立交叉验证](docs/CROSS_VALIDATION.md)
-- [泛化优先准入规范](docs/GENERALIZATION_POLICY.md)
+- [产品规格](docs/PRODUCT_SPEC.zh-CN.md)
+- [策略程序设计](docs/STRATEGY_PROGRAM.zh-CN.md)
+- [内部 DSL/IR 设计](docs/STRATEGY_DSL.zh-CN.md)
+- [技术架构](docs/TECH_ARCHITECTURE.zh-CN.md)
+- [商务与市场方案](docs/BUSINESS_PLAN.zh-CN.md)
+- [历史行情数据管线](docs/DATA_PIPELINE.zh-CN.md)
+- [当前项目状态与后续工作](docs/PROJECT_STATUS.zh-CN.md)
+- [互联网策略意图语料库](docs/INTERNET_INTENT_CORPUS.zh-CN.md)
+- [回测引擎独立交叉验证](docs/CROSS_VALIDATION.zh-CN.md)
+- [泛化优先准入规范](docs/GENERALIZATION_POLICY.zh-CN.md)
 
 ## 已确定的核心原则
 
@@ -27,7 +27,7 @@
 4. 首个交易场所为 Hyperliquid，首批品种为 BTC、ETH、SOL 永续合约。
 5. 产品不托管用户资产，不接收助记词或主钱包私钥。
 6. 优先建立可信回测、真实运行记录和高质量市场数据库。
-7. 所有修复必须实现样例背后的通用语义能力；禁止按原句、常量或单一策略打补丁，完整准入门槛见[泛化优先准入规范](docs/GENERALIZATION_POLICY.md)。
+7. 所有修复必须实现样例背后的通用语义能力；禁止按原句、常量或单一策略打补丁，完整准入门槛见[泛化优先准入规范](docs/GENERALIZATION_POLICY.zh-CN.md)。
 
 ## 自然语言策略闭环
 
@@ -83,7 +83,7 @@ npm run intents:suggest -- --limit 25 --concurrency 2
 npm run intents:evaluate -- --split development --concurrency 2
 ```
 
-数据默认写入 Git 已忽略的 `data/internet-intents/`。完整来源边界、格式和验证结果见[互联网策略意图语料库](docs/INTERNET_INTENT_CORPUS.md)。
+数据默认写入 Git 已忽略的 `data/internet-intents/`。完整来源边界、格式和验证结果见[互联网策略意图语料库](docs/INTERNET_INTENT_CORPUS.zh-CN.md)。
 
 ## 本地数据与回测
 

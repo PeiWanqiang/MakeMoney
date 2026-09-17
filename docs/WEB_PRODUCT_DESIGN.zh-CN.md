@@ -1,9 +1,9 @@
 # Web 产品形态设计：登录、分步链路、我的策略、中英文
 
 状态：Design v1 —— 已按本文实现（2026-08-01）。与设计的偏差记在第 8 节。
-关联：[产品规格](PRODUCT_SPEC.md)｜[项目状态](PROJECT_STATUS.md)｜[泛化优先准入规范](GENERALIZATION_POLICY.md)
+关联：[产品规格](PRODUCT_SPEC.zh-CN.md)｜[项目状态](PROJECT_STATUS.zh-CN.md)｜[泛化优先准入规范](GENERALIZATION_POLICY.zh-CN.md)
 
-本文覆盖 [项目状态 2.8](PROJECT_STATUS.md) 里那条唯一未完成项：**「登录、对象所有权、分享、订阅、计费和异步回测任务尚未完成」** 中的登录与对象所有权部分，外加信息架构重构和国际化。
+本文覆盖 [项目状态 2.8](PROJECT_STATUS.zh-CN.md) 里那条唯一未完成项：**「登录、对象所有权、分享、订阅、计费和异步回测任务尚未完成」** 中的登录与对象所有权部分，外加信息架构重构和国际化。
 
 已确认的四个决策：Google 账户登录 · 匿名可用到第 2 步、回测前拦登录 · `/zh` `/en` URL 前缀 · 分步路由每次只渲染当前步。
 
@@ -297,7 +297,7 @@ app/i18n/index.ts          getMessages(locale)
 
 ## 7. 本设计不包含
 
-- 分享链接、订阅计费、异步回测队列（仍在 [项目状态](PROJECT_STATUS.md) 的未完成项里）。
+- 分享链接、订阅计费、异步回测队列（仍在 [项目状态](PROJECT_STATUS.zh-CN.md) 的未完成项里）。
 - 邮箱/密码登录、钱包绑定（`PRODUCT_SPEC.md` 5.1 的 MVP 项，本次只做 Google）。
 - 策略重命名以外的编辑；策略版本树 UI。
 - 英文 OG 图与英文示例策略语料。

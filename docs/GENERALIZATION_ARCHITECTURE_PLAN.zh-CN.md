@@ -2,7 +2,7 @@
 
 状态：执行中  
 适用范围：自然语言意图、策略契约、编译器、运行时、回测服务、Web、数据、缓存、优化、Paper、Live、测试与文档。  
-准入规范：[GENERALIZATION_POLICY.md](GENERALIZATION_POLICY.md)
+准入规范：[GENERALIZATION_POLICY.md](GENERALIZATION_POLICY.zh-CN.md)
 
 ## 1. 通用能力定义
 

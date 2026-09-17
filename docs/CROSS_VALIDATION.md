@@ -1,41 +1,53 @@
-# 回测引擎独立交叉验证
+# Independent cross-validation of the backtest engine
 
-状态：Implemented v0.1  
-参考引擎：Python stdlib-only `python-reference-0.1.0`  
-主引擎：TypeScript/QuickJS `0.2.0`
+English | [简体中文](CROSS_VALIDATION.zh-CN.md)
 
-## 目标
+Status: Implemented v0.1  
+Reference engine: Python stdlib-only `python-reference-0.1.0`  
+Primary engine: TypeScript/QuickJS `0.2.0`
 
-确定性只能证明同一实现会稳定重复结果，不能证明实现正确。项目因此维护第二套不导入 TypeScript Runtime 的 Python 参考引擎，独立实现：
+## Goal
 
-- EMA 初始化和递推。
-- Cross Above/Below。
-- Bar 收盘信号和下一 Bar 开盘成交。
-- Long/Short 方向和风险仓位。
-- Taker fee 和固定 bps 滑点。
-- Funding 的方向、Mark Price 名义金额和累计。
-- 止损、止盈、信号平仓和期末平仓。
-- 同 Bar 止盈止损冲突时止损优先。
+Determinism only proves that one implementation repeats itself; it does not
+prove the implementation is correct. The project therefore maintains a second
+engine, written in Python, that imports nothing from the TypeScript runtime and
+independently implements:
 
-比较器逐笔核对交易方向、进出时间、成交价、数量、Gross PnL、Funding、费用、滑点、Net PnL 和退出原因，并逐点核对权益曲线。默认容差为绝对 `1e-8`、相对 `1e-10`；任何超差都会生成失败报告并让命令返回非零。
+- EMA seeding and recursion.
+- Cross above / cross below.
+- Bar-close signals with next-bar-open fills.
+- Long/short direction and risk-based position sizing.
+- Taker fees and fixed-bps slippage.
+- Funding direction, mark-price notional, and accumulation.
+- Stop loss, take profit, signal exits, and end-of-period liquidation.
+- Stop-loss priority when a stop and a target collide on the same bar.
 
-## 已完成验证
+The comparator checks every trade field by field — direction, entry and exit
+time, fill price, size, gross PnL, funding, fees, slippage, net PnL, and exit
+reason — and checks the equity curve point by point. Default tolerances are
+`1e-8` absolute and `1e-10` relative; any excess produces a failure report and
+makes the command exit non-zero.
 
-数据集：`binance-usdm-btcusdt-perp-1m-2020-01-2026-06`  
-周期：4h  
-权益点：每个策略 14,238
+## Completed runs
 
-| 策略 | 交易数 | 交易字段最大差异 | 权益最大差异 | 状态 |
+Dataset: `binance-usdm-btcusdt-perp-1m-2020-01-2026-06`  
+Timeframe: 4h  
+Equity points: 14,238 per strategy
+
+| Strategy | Trades | Max trade-field difference | Max equity difference | Status |
 |---|---:|---:|---:|---|
-| EMA + negative Funding | 82 | 0 | 0 | PASS |
+| EMA + negative funding | 82 | 0 | 0 | PASS |
 | Long-only 20/50 EMA | 135 | 0 | 0 | PASS |
 
-Funding 报告 ID：`d2d885663677bb7933380082760afaf8d81f0c67a7d77ed5833fa38411da61ff`  
-趋势报告 ID：`6ce34c9a660f1d0a917350605ad02f31756edca91e7ea381df0aa372f10fcda2`
+Funding report ID: `d2d885663677bb7933380082760afaf8d81f0c67a7d77ed5833fa38411da61ff`  
+Trend report ID: `6ce34c9a660f1d0a917350605ad02f31756edca91e7ea381df0aa372f10fcda2`
 
-报告固定记录 Python 源码 SHA-256、输入 fixture SHA-256、78 个数据分区哈希、策略程序哈希、引擎版本、配置、容差和所有差异。
+Each report permanently records the SHA-256 of the Python source, the SHA-256 of
+the input fixture, the hashes of all 78 data partitions, the strategy program
+hash, both engine versions, the configuration, the tolerances, and every
+difference found.
 
-## 使用方式
+## Usage
 
 ```bash
 npm run backtest:cross-validate -- \
@@ -49,21 +61,27 @@ npm run backtest:cross-validate -- \
   trend
 ```
 
-实现：
+Implementation:
 
-- `reference/python_reference_backtest.py`：独立 Python 引擎。
-- `scripts/cross-validate-backtest.ts`：固定输入、运行两个引擎、逐字段比较和生成报告。
-- `test/reference-backtest.test.ts`：每次 `npm test` 都执行的跨语言回归。
+- `reference/python_reference_backtest.py` — the independent Python engine.
+- `scripts/cross-validate-backtest.ts` — fixes the inputs, runs both engines,
+  compares field by field, and writes the report.
+- `test/reference-backtest.test.ts` — the cross-language regression that runs on
+  every `npm test`.
 
-## 验证边界
+## Limits of this validation
 
-当前 Python 引擎接收 TypeScript 数据层已经聚合好的 Bar，因此本轮独立验证覆盖“策略指标与回测执行语义”，不独立覆盖：
+The Python engine currently receives bars that the TypeScript data layer has
+already aggregated, so this round covers *strategy indicators and backtest
+execution semantics*. It does not independently cover:
 
-- ZIP/CSV 解析。
-- Parquet 编解码。
-- 1m 到 4h 聚合。
-- Mark Price 缺失回退。
-- 数据源本身是否正确。
-- 保证金和爆仓；主引擎当前也未实现完整模型。
+- ZIP/CSV parsing.
+- Parquet encoding and decoding.
+- 1m to 4h aggregation.
+- The fallback for missing mark prices.
+- Whether the data source itself is correct.
+- Margin and liquidation; the primary engine does not model these fully either.
 
-两套实现也可能对同一份错误规格做出一致结果。后续仍需用手算小样本、交易所规则案例和第三方结果进行验证，不能把 `PASS` 等同于所有回测语义已经正确。
+Two implementations can also agree on the same wrong specification. Hand-computed
+small samples, documented exchange rules, and third-party results are still
+needed. A `PASS` here does not mean every backtest semantic is correct.

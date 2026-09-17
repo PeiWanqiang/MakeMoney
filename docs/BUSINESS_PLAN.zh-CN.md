@@ -1,9 +1,9 @@
 # 商务与市场方案：Crypto Strategy Studio
 
 状态：Draft v0.1  
-对应文档：[产品规格](PRODUCT_SPEC.md)｜[技术架构](TECH_ARCHITECTURE.md)
+对应文档：[产品规格](PRODUCT_SPEC.zh-CN.md)｜[技术架构](TECH_ARCHITECTURE.zh-CN.md)
 
-用户反馈、定价和获客实验同样遵循[泛化优先准入规范](GENERALIZATION_POLICY.md)：个案用于形成假设，不直接外推为市场结论；只有跨用户和跨场景证据才能沉淀为标准产品或商务策略。
+用户反馈、定价和获客实验同样遵循[泛化优先准入规范](GENERALIZATION_POLICY.zh-CN.md)：个案用于形成假设，不直接外推为市场结论；只有跨用户和跨场景证据才能沉淀为标准产品或商务策略。
 
 > 本文是产品和经营规划，不构成任何国家的法律、税务或金融牌照意见。实盘、个性化策略、成交收费和创作者分成上线前，必须由目标市场的专业律师出具书面分析。
 

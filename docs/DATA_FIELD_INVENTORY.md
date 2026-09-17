@@ -1,71 +1,104 @@
-# 策略指标依赖数据字段清单
+# Market-data fields available to strategy indicators
 
-状态：Inventory v0.1（2026-08-04，基于 `src/data/` 与 `web/worker/backtest-api.ts` 核对）
+English | [简体中文](DATA_FIELD_INVENTORY.zh-CN.md)
 
-目标：为策略指标依赖提供尽可能完整的基础行情字段，明确「已拿到」「源里有但当前丢弃」「结构性拿不到」三类。
+Status: Inventory v0.1 (2026-08-04, checked against `src/data/` and
+`web/worker/backtest-api.ts`)
 
-## 1. 已拿到（已在库，`data/history/` 管线）
+Goal: give strategy indicators the most complete base market data we can, and
+state clearly which fields are *already stored*, which are *present in the
+source but currently discarded*, and which are *structurally unavailable*.
 
-| 字段 | Binance Spot BTCUSDT 2024 | Binance USD-M BTCUSDT-PERP 2020–2026 | Kraken XBTUSD 2016–2026 | Hyperliquid 近期 |
+## 1. Already stored (in the `data/history/` pipeline)
+
+| Field | Binance Spot BTCUSDT 2024 | Binance USD-M BTCUSDT-PERP 2020–2026 | Kraken XBTUSD 2016–2026 | Hyperliquid, recent |
 |---|---|---|---|---|
-| Open / High / Low / Close | ✓ | ✓ | ✓（代码就绪，ZIP 未跑通） | ✓ |
-| Volume（base 成交量） | ✓ | ✓ | ✓ | ✓ |
-| Trades（笔数） | ✓（Binance 第 8 列） | ✓ | ✓（OHLCVT 的 T） | ✓（candle `n`） |
-| Funding Rate | —（现货恒 0） | ✓（7,119 事件，按结算分钟） | — | ✓（逐小时事件，按 bar 求和） |
-| Funding Premium | — | — | — | ✓ |
-| Mark Price | — | ✓（0.38% 缺失，集中在 8 个月，回退成交收盘并披露） | — | — |
+| Open / High / Low / Close | ✓ | ✓ | ✓ (code ready, ZIP path not yet working) | ✓ |
+| Volume (base) | ✓ | ✓ | ✓ | ✓ |
+| Trades (count) | ✓ (Binance column 8) | ✓ | ✓ (the T in OHLCVT) | ✓ (candle `n`) |
+| Funding rate | — (always 0 for spot) | ✓ (7,119 events, by settlement minute) | — | ✓ (hourly events, summed per bar) |
+| Funding premium | — | — | — | ✓ |
+| Mark price | — | ✓ (0.38% missing, concentrated in 8 months; falls back to the traded close, and discloses it) | — | — |
 
-数据质量：分钟缺口检测、重复/非法 OHLC 检测、不完整聚合桶不入回测、SHA-256 + catalog manifest 均已实现。
+Data quality: minute-gap detection, duplicate and invalid-OHLC detection,
+exclusion of incomplete aggregation buckets from backtests, and SHA-256 plus a
+catalog manifest are all implemented.
 
-## 2. 源里有但当前丢弃（免费补，已实现 2026-08-04）
+## 2. Present in the source but previously discarded (free to add; done 2026-08-04)
 
-Binance K 线归档/接口是 12 列，`parseBinanceKline`（`src/data/historical-dataset.ts`）此前只读 0–5 + 8。Spot 月包与 USD-M 月包**同一个 ZIP 里还有**：
+Binance kline archives and endpoints have 12 columns. `parseBinanceKline`
+(`src/data/historical-dataset.ts`) previously read only 0–5 and 8. The same ZIP,
+for both the spot and USD-M monthly packages, **also contains**:
 
-| 列 | 字段 | 含义 | 状态 |
+| Column | Field | Meaning | Status |
 |---|---|---|---|
-| 7 | `quote_asset_volume` | 成交额（quote 计价，**换手率的基础分母**） | ✓ 已入库 |
-| 8 | `number_of_trades` | 笔数 | ✓ 已存（原已有） |
-| 9 | `taker_buy_base_volume` | 主动买量（base） | ✓ 已入库 |
-| 10 | `taker_buy_quote_volume` | 主动买成交额（quote） | ✓ 已入库 |
+| 7 | `quote_asset_volume` | Turnover in quote currency (**the denominator any turnover-rate metric needs**) | ✓ stored |
+| 8 | `number_of_trades` | Trade count | ✓ stored (already was) |
+| 9 | `taker_buy_base_volume` | Aggressive buy volume (base) | ✓ stored |
+| 10 | `taker_buy_quote_volume` | Aggressive buy turnover (quote) | ✓ stored |
 
-**实现落点（2026-08-04）**：
-- `MarketBar` 增加 `quoteVolume?`、`takerBuyBaseVolume?`、`takerBuyQuoteVolume?`（`src/core/types.ts`）。
-- `parseBinanceKline` 补读 7/9/10 列（`src/data/historical-dataset.ts`）。
-- Parquet 快照按需写入/读回三列，旧分区无此列仍可读（`src/data/market-snapshot.ts`）。
-- 聚合 15m/1h/4h 时求和透传（`src/data/aggregate-bars.ts`）。
-- SDK / 沙箱 / 编译器声明 / prompt 暴露 `market.quoteVolume`、`market.takerBuyBaseVolume`、`market.takerBuyQuoteVolume`（`market.*` 与 `history.*` 均可引用；未提供时为 `null`），并可作为 `sma/ema/highest/lowest/standardDeviation/bollingerBands/percentChange` 的字段入参。
-- 测试：解析、快照往返、聚合求和已覆盖（`test/historical-data.test.ts`）。
+**Where this landed (2026-08-04):**
 
-存量 ZIP 只需重跑解析（下载缓存仍在，`data/cache/`），不需要重新下载。当前实现为可选字段：非 Binance 来源（Kraken/HL）不携带，策略读到 `null`。
+- `MarketBar` gained `quoteVolume?`, `takerBuyBaseVolume?`, and
+  `takerBuyQuoteVolume?` (`src/core/types.ts`).
+- `parseBinanceKline` now also reads columns 7, 9, and 10
+  (`src/data/historical-dataset.ts`).
+- Parquet snapshots write and read back the three columns when present; older
+  partitions without them still load (`src/data/market-snapshot.ts`).
+- Aggregation to 15m/1h/4h sums them through (`src/data/aggregate-bars.ts`).
+- The SDK, sandbox, compiler declarations, and prompt expose
+  `market.quoteVolume`, `market.takerBuyBaseVolume`, and
+  `market.takerBuyQuoteVolume` (reachable through both `market.*` and
+  `history.*`, `null` when not provided), and they can be passed as the field
+  argument to `sma`, `ema`, `highest`, `lowest`, `standardDeviation`,
+  `bollingerBands`, and `percentChange`.
+- Tests cover parsing, snapshot round-trip, and aggregation summing
+  (`test/historical-data.test.ts`).
 
-Web 侧 `parseKlineRows`（`web/worker/backtest-api.ts:781`）仍只读前 6 列；Phase 5 数据所有权并入服务后由服务统一承担，无需单独修。注意：**在 Web 引擎被 Path A 替换前，Web 回测还不能解释 `market.quoteVolume` 等新字段条件**（会按无法解释拒绝）；CLI/沙箱已完全支持。
+Existing ZIPs only need to be re-parsed; the download cache is still in
+`data/cache/`, so nothing has to be downloaded again. The fields are optional:
+non-Binance sources (Kraken, Hyperliquid) do not carry them, and a strategy
+reads `null`.
 
-## 3. 结构性拿不到 / 源受限（试了多次拿不到或 1m 全程根本不存在）
+On the web side, `parseKlineRows` (`web/worker/backtest-api.ts:781`) still reads
+only the first 6 columns. Data ownership moves into the service in Phase 5, which
+will cover this, so it does not need a separate fix. Note that **until the web
+engine is replaced under Path A, a web backtest cannot interpret conditions on
+`market.quoteVolume` and the other new fields** — it rejects them as
+uninterpretable. The CLI and the sandbox support them fully.
 
-| 字段 | 结论 | 原因 |
+## 3. Structurally unavailable or source-limited
+
+| Field | Conclusion | Reason |
 |---|---|---|
-| Open Interest 1m 全程 | **拿不到** | Binance USD-M 官方长期归档从 ~2021 才开始、且是 **5m 日包**；REST `openInterestHist` 单次仅 30 天。2020 全年及更早无 1m。Hyperliquid OI 只有当前快照（`metaAndAssetCtxs`），无历史。 |
-| Mark Price 无缺失全程 | **拿不到** | 8 个月有 0.38% 缺失，只能回退成交收盘 + 披露，原始值补不回来。 |
-| 换手率（基于流通盘） | **无此原始字段** | 加密永续没有权威流通盘口径；交易所只给 `quote_asset_volume`。"换手率"只能自定义派生（如 `quoteVolume / N 日均量`），属于派生指标。 |
-| L2 深度/订单簿历史 | **拿不到** | Spot 无长期归档；USD-M `bookDepth` 快照文件巨大、覆盖有限，无法支撑 2020 起 1m 全程。 |
-| 爆仓事件历史 | **拿不到** | 交易所只有实时 WebSocket，无历史归档。 |
-| 逐笔成交历史（2020 起全程） | **拿不到/不现实** | 归档覆盖不全或体积不可控；产品 Bar 级引擎不需要。 |
-| 多空持仓比 / 账户比值历史 | **受限** | Binance REST 仅 top trader 口径、单次 30 天窗口，回填工作量大且不完整。 |
+| Open interest, 1m, full history | **Unavailable** | The official Binance USD-M long-term archive starts around 2021 and ships **5m daily packages**; REST `openInterestHist` returns only 30 days per call. Nothing at 1m for 2020 or earlier. Hyperliquid exposes only a current OI snapshot (`metaAndAssetCtxs`), with no history. |
+| Mark price with no gaps | **Unavailable** | Eight months have 0.38% missing. The only option is the traded-close fallback plus disclosure; the original values cannot be recovered. |
+| Turnover rate (against float) | **No such raw field** | Crypto perpetuals have no authoritative free-float measure; exchanges provide only `quote_asset_volume`. A "turnover rate" can only be derived (for example `quoteVolume / N-day average`), which makes it a derived indicator. |
+| L2 depth / order-book history | **Unavailable** | Spot has no long-term archive; the USD-M `bookDepth` snapshot files are enormous and cover little, and cannot support 1m from 2020 onward. |
+| Liquidation event history | **Unavailable** | Exchanges offer only a live WebSocket feed, with no archive. |
+| Tick-by-tick trades from 2020 | **Unavailable / impractical** | Archive coverage is incomplete and the volume is unmanageable; a bar-level engine does not need it. |
+| Long/short position and account ratios | **Limited** | Binance REST covers only the top-trader definition, 30 days per call. Backfilling is heavy and still incomplete. |
 
-> 注：Kraken 十年与 Hyperliquid 长历史属于"源存在但本机未跑通/未接入"，不是"拿不到"，见 §4。
+> Note: the Kraken decade and the long Hyperliquid history are "the source
+> exists but is not yet wired up locally", not "unavailable". See §4.
 
-## 4. 可拿但需要新下载工作量（不是拿不到，按需排期）
+## 4. Obtainable, but needs new download work (schedule as needed)
 
-| 字段 | 来源 | 工作量 |
+| Field | Source | Work |
 |---|---|---|
-| Index / Oracle 价格 | Binance USD-M `indexPriceKlines` REST（与已接的 `markPriceKlines` 同构）；HL oracle 走其 API | 新下载脚本 + 缺口处理 |
-| Open Interest 5m（2021+ 部分年份） | `openInterestHist` 逐月回填 | 大量请求 + 5m→1m 对齐策略 |
-| Hyperliquid 全量历史 | HL 官方数据桶（S3） | 新接入器 + 体积评估 |
-| 主动买卖比派生指标 | §2 的 taker buy 字段 | 随 §2 一并获得，零额外源 |
+| Index / oracle price | Binance USD-M `indexPriceKlines` REST (same shape as the `markPriceKlines` feed already wired up); Hyperliquid oracle through its API | New download script plus gap handling |
+| Open interest 5m (part of 2021+) | Backfill `openInterestHist` month by month | Many requests, plus a 5m→1m alignment policy |
+| Full Hyperliquid history | The official Hyperliquid S3 data bucket | New connector plus a size assessment |
+| Aggressive buy/sell ratio metrics | The taker-buy fields from §2 | Comes with §2, no extra source |
 
-## 5. 建议优先级
+## 5. Suggested priority
 
-1. **立即（半天）**：§2 四个字段入库——同一 ZIP 免费拿，直接解锁成交额/主动买卖比等指标依赖。
-2. **随 Path A 一并**：数据所有权并入 Backtest Service，字段 schema 统一在 `src/contracts/`，Web 不再各存各的。
-3. **按产品需求排期**：Index 价格、OI 5m、HL 全量历史（§4）。
-4. **明确不做**：L2 历史、爆仓历史、逐笔全程（§3），除非产品验证明确要求。
+1. **Immediately (half a day)**: store the four fields in §2 — they come free
+   from the same ZIP and directly unlock turnover and aggressive buy/sell
+   indicators.
+2. **Together with Path A**: move data ownership into the backtest service, with
+   one field schema in `src/contracts/`, so the web side stops keeping its own.
+3. **Schedule against product need**: index price, 5m open interest, and the full
+   Hyperliquid history (§4).
+4. **Explicitly not doing**: L2 history, liquidation history, and full
+   tick-by-tick history (§3), unless product validation clearly demands them.

@@ -1,92 +1,136 @@
-# 泛化优先准入规范
+# Generalization-first acceptance policy
 
-状态：项目级强制规范  
-适用范围：产品、用户研究、商务实验、自然语言意图、提示词、策略契约、Strategy SDK、编译器、验证器、运行时、回测、Paper、Live、前端、数据、缓存、测试与文档。
+English | [简体中文](GENERALIZATION_POLICY.zh-CN.md)
 
-## 1. 核心规则
+Status: mandatory, project-wide  
+Scope: product, user research, business experiments, natural-language intents,
+prompts, strategy contracts, the Strategy SDK, the compiler, the validator, the
+runtime, backtesting, paper trading, live trading, the frontend, data, caching,
+tests, and documentation.
 
-任何用户样例都只能作为需求证据和回归用例，不能成为实现边界。实现目标必须是样例背后的可复用语义原语。
+## 1. The core rule
 
-禁止：
+A user's example is evidence of a requirement and a regression case. It is never
+the boundary of the implementation. What gets implemented is the reusable
+semantic primitive behind the example.
 
-- 按用户原句、关键词组合或某次模型输出写特殊分支。
-- 写死样例中的数字、标的、市场、方向、周期或语言。
-- 只修改提示词，让模型声称“支持”，而契约和执行器并不能确定性执行。
-- 为 Backtest、Paper、Live 分别实现含义不同的近似版本。
-- 只有原始样例通过就宣布能力完成。
-- 为通过固定评测集而调整逻辑，却不验证未见变体。
+Forbidden:
 
-必须：
+- Special-casing a user's exact sentence, a keyword combination, or one
+  particular model output.
+- Hard-coding a number, instrument, market, direction, timeframe, or language
+  taken from an example.
+- Changing only the prompt so the model claims to "support" something the
+  contract and the executor cannot deterministically execute.
+- Implementing separate approximations that mean different things in backtest,
+  paper, and live.
+- Declaring a capability finished because the original example passes.
+- Tuning logic to clear a fixed evaluation set without testing unseen variants.
 
-- 先把需求归纳为与样例常量无关的语义能力。
-- 定义输入、输出、单位、边界、错误和执行时序。
-- 通过版本化类型或契约表达，不用自由文本充当运行语义。
-- 在所有实际消费该语义的层级中保持一致。
-- 无法安全泛化时继续标记 `unsupported`，并记录缺少的通用原语。
+Required:
 
-## 2. 实现路径
+- Generalize the requirement into a semantic capability that is independent of
+  the example's constants.
+- Define inputs, outputs, units, boundaries, errors, and execution timing.
+- Express it through versioned types or contracts, never free text standing in
+  for runtime semantics.
+- Keep it consistent across every layer that actually consumes the semantics.
+- When it cannot be generalized safely, keep it `unsupported` and record the
+  missing reusable primitive.
 
-每项新能力开始前先写一句与样例无关的能力定义。例如：
+## 2. Implementation path
 
-> 错误：支持“BTC 4小时从100根最高价回撤50%”。  
-> 正确：数值行情与指标表达式支持受限四则运算和括号；仓位支持账户权益比例名义金额。
+Before starting a capability, write one sentence defining it without reference to
+the example. For instance:
 
-随后逐层检查：
+> Wrong: support "BTC 4h, a 50% retracement from the highest high of the last
+> 100 bars".  
+> Right: numeric market and indicator expressions support bounded arithmetic and
+> parentheses; position sizing supports notional as a fraction of account equity.
 
-1. **意图层**：不同语言和表达方式能映射到同一语义，歧义必须追问。
-2. **契约与类型层**：具有明确字段、单位、范围和版本；不依赖自然语言解释执行。
-3. **编译与校验层**：接受所有合法组合，拒绝非法值、危险能力和不支持的组合。
-4. **执行层**：Backtest、Paper、Live 使用同一语义定义和时序，不静默近似。
-5. **产品层**：用户看到的总结、契约、图表和交易记录与实际执行一致。
-6. **数据与缓存层**：能力或语义变化时更新版本键，不能复用旧语义结果。
-7. **文档层**：能力表描述通用边界，不把单个示例写成产品能力。
+Then check layer by layer:
 
-不是每次改动都涉及全部七层，但必须显式确认哪些层适用；不能漏掉实际消费该能力的层。
+1. **Intent** — different languages and phrasings map to the same semantics, and
+   ambiguity must trigger a clarifying question.
+2. **Contract and types** — explicit fields, units, ranges, and a version;
+   execution never depends on interpreting natural language.
+3. **Compile and validate** — accept every legal combination; reject illegal
+   values, dangerous capabilities, and unsupported combinations.
+4. **Execution** — backtest, paper, and live use one semantic definition and one
+   timing model, with no silent approximation.
+5. **Product** — the summary, contract, charts, and trade records the user sees
+   match what actually executed.
+6. **Data and caching** — version keys change when a capability or its semantics
+   change, so results computed under old semantics are never reused.
+7. **Documentation** — the capability table describes general boundaries, and a
+   single example is never written up as a product capability.
 
-## 3. 测试准入门槛
+Not every change touches all seven layers, but which layers apply must be stated
+explicitly, and no layer that actually consumes the capability may be skipped.
 
-功能完成至少需要以下证据：
+## 3. Test acceptance bar
 
-1. **原始回归**：用户报告的样例通过端到端路径。
-2. **参数变体**：更换关键数值，证明没有写死常量。
-3. **结构变体**：至少更换运算符、方向、指标、仓位类型、周期或语言中的一个相关维度。
-4. **边界或拒绝**：非法范围、除零、缺失条件、未来数据或不支持能力被明确阻止。
-5. **语义一致性**：机器契约、用户解释和实际交易行为一致。
-6. **既有回归**：原有测试集继续通过。
+A feature is complete only with at least this evidence:
 
-高风险交易语义还应增加：
+1. **Original regression** — the user's reported example passes end to end.
+2. **Parameter variant** — key numbers changed, proving no constant is baked in.
+3. **Structural variant** — at least one relevant dimension changed among
+   operator, direction, indicator, position type, timeframe, or language.
+4. **Boundary or rejection** — illegal ranges, division by zero, missing
+   conditions, lookahead, and unsupported capabilities are explicitly blocked.
+5. **Semantic consistency** — the machine contract, the user-facing explanation,
+   and the actual trading behavior agree.
+6. **Existing regression** — the existing test suite still passes.
 
-- 手算的小型确定性数据集。
-- 与独立参考实现或录制事件回放的交叉验证。
-- Backtest 与 Paper/Live 的同输入一致性测试。
+High-risk trading semantics additionally require:
 
-## 4. 评测防过拟合
+- A small deterministic dataset computed by hand.
+- Cross-validation against an independent reference implementation or a recorded
+  event replay.
+- A same-input consistency test between backtest and paper/live.
 
-- 开发集用于定位问题；冻结测试集和盲测集不得参与提示词或规则调试。
-- 新增修复后，除原始样例外必须加入未见表达和组合变体。
-- 报告分开呈现固定回归、真实用户表达、盲测和重复运行稳定性。
-- 单个模型、单次运行或固定合成集的满分不能表述为产品准确率。
-- 测试样例中的具体常量不应出现在生产分支判断中，除非它们是明确的风控上限或协议标准。
+## 4. Guarding evaluations against overfitting
 
-## 5. 产品与商务泛化
+- The development split is for diagnosing problems. Frozen test and blind splits
+  must never participate in prompt or rule tuning.
+- Every fix adds unseen phrasings and combination variants, not just the original
+  example.
+- Reports present fixed regressions, real user phrasings, blind runs, and
+  repeated-run stability separately.
+- A perfect score from one model, one run, or one fixed synthetic set is never
+  reported as product accuracy.
+- Constants that appear in test cases must not appear in production branching,
+  unless they are an explicit risk limit or a protocol standard.
 
-- 单个用户反馈是发现问题的证据，不是整个市场的结论。
-- 将反馈归纳为可证伪假设，并在不同用户、语言、策略类型和使用阶段中验证。
-- 定价、套餐、文案、获客渠道和流程不能只为一名测试用户定制，除非明确记录为有期限的人工服务实验。
-- 商务结论必须区分个案、细分用户共性和可扩展市场证据。
-- 合规、地区和交易场所例外必须显式建模，不能为了表面泛化而抹平真实法律边界。
+## 5. Generalization in product and business
 
-## 6. 变更验收清单
+- One user's feedback is evidence of a problem, not a conclusion about the
+  market.
+- Turn feedback into a falsifiable hypothesis and test it across different users,
+  languages, strategy types, and stages of use.
+- Pricing, plans, copy, acquisition channels, and flows are never tailored to a
+  single test user, unless explicitly recorded as a time-boxed manual-service
+  experiment.
+- Business conclusions must distinguish a single case, a pattern shared by a
+  segment, and evidence of a scalable market.
+- Compliance, regional, and venue exceptions are modeled explicitly. Real legal
+  boundaries are never flattened for the appearance of generality.
 
-合并或发布前逐项确认：
+## 6. Change acceptance checklist
 
-- [ ] 能力定义不包含原始样例的偶然常量。
-- [ ] 没有用户原句、单一标的、周期、方向或语言的特殊分支。
-- [ ] 模型生成的语义能被确定性契约和执行器消费。
-- [ ] 所有适用层级采用同一含义和单位。
-- [ ] 缓存、制品或引擎版本已在语义变化时更新。
-- [ ] 原始样例、参数变体、结构变体和边界测试均有覆盖。
-- [ ] 用户解释与实际执行结果一致。
-- [ ] 文档记录的是通用能力和真实边界。
+Confirm each item before merging or releasing:
 
-任何一项不满足，都不能把该能力标记为已完成或已支持。
+- [ ] The capability definition contains no incidental constant from the original
+      example.
+- [ ] No special-case branch on a user's sentence, a single instrument,
+      timeframe, direction, or language.
+- [ ] The semantics the model generates can be consumed by a deterministic
+      contract and executor.
+- [ ] Every applicable layer uses the same meaning and the same units.
+- [ ] Cache, artifact, or engine versions were bumped where semantics changed.
+- [ ] Original example, parameter variant, structural variant, and boundary tests
+      are all covered.
+- [ ] The explanation shown to the user matches what execution actually did.
+- [ ] Documentation records the general capability and its real boundaries.
+
+If any item fails, the capability may not be marked complete or supported.
